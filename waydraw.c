@@ -1,0 +1,435 @@
+#include "draw.h"
+#include "shm.h"
+
+#include <wayland-client-core.h>
+#include <wayland-client-protocol.h>
+#include <wayland-client.h>
+
+#include <wayland-util.h>
+#include <xdg-shell-client-protocol.h>
+#include <wlr-layer-shell-unstable-v1-client-protocol.h>
+
+#include <assert.h>
+
+#include <stdlib.h>
+#include <stdio.h>
+#include <string.h>
+#include <stdbool.h>
+#include <errno.h>
+
+#include <unistd.h>
+
+#include <sys/mman.h>
+
+#include <linux/input-event-codes.h>
+
+#define SCROLL_SENSITIVITY 0.1
+#define MIN_DRAW_RADIUS 1
+
+struct waydraw_output
+{
+  struct waydraw *waydraw;
+
+  struct wl_list link;
+
+  struct wl_output *wl_output;
+  struct wl_surface *wl_surface;
+  struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1;
+
+  uint32_t width;
+  uint32_t height;
+  uint32_t *data;
+};
+
+struct waydraw_seat
+{
+  struct wl_seat *wl_seat;
+
+  struct wl_keyboard *wl_keyboard;
+  struct wl_pointer *wl_pointer;
+
+  struct waydraw_output *keyboard_focus;
+  struct waydraw_output *pointer_focus;
+
+  bool drawing;
+  uint32_t color;
+  int32_t radius;
+};
+
+struct waydraw
+{
+  struct wl_display *wl_display;
+
+  struct wl_compositor *wl_compositor;
+  struct wl_shm *wl_shm;
+  struct zwlr_layer_shell_v1 *zwlr_layer_shell_v1;
+
+  bool initialized;
+
+  struct waydraw_seat seat;
+  struct wl_list outputs;
+};
+
+static void handle_global(void *data, struct wl_registry *wl_registry, uint32_t name, const char *interface, uint32_t version);
+
+static void handle_output(struct waydraw *waydraw, struct wl_output *wl_output);
+static void handle_seat(struct waydraw *waydraw, struct wl_seat *wl_seat);
+
+static void init_output(struct waydraw_output *output);
+static void update_output(struct waydraw_output *output, int32_t damage_x, int32_t damage_y, int32_t damage_width, int32_t damage_height);
+
+static void seat_capabilities(void *data, struct wl_seat *wl_seat, uint32_t capabilities);
+
+static void keyboard_enter(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, struct wl_surface *surface, struct wl_array *keys);
+static void keyboard_leave(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, struct wl_surface *surface);
+
+static void pointer_enter(void *data, struct wl_pointer *wl_pointer, uint32_t serial, struct wl_surface *surface, wl_fixed_t surface_x, wl_fixed_t surface_y);
+static void pointer_leave(void *data, struct wl_pointer *wl_pointer, uint32_t serial, struct wl_surface *surface);
+
+static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t time, wl_fixed_t surface_x, wl_fixed_t surface_y);
+static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t serial, uint32_t time, uint32_t button, uint32_t state);
+static void pointer_axis(void *data, struct wl_pointer *wl_pointer, uint32_t time, uint32_t axis, wl_fixed_t value);
+
+static void configure_surface(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1, uint32_t serial, uint32_t width, uint32_t height);
+static void release_buffer(void *data, struct wl_buffer *wl_buffer);
+
+static struct wl_buffer *create_buffer(const struct waydraw *waydraw, uint32_t width, uint32_t height, void *data);
+
+static void noop() {}
+
+static struct wl_registry_listener wl_registry_listener = {
+  .global = &handle_global,
+  .global_remove = &noop,
+};
+
+static struct wl_seat_listener wl_seat_listener = {
+  .capabilities = &seat_capabilities,
+  .name = &noop,
+};
+
+static struct wl_keyboard_listener wl_keyboard_listener = {
+  .keymap = &noop,
+  .enter = &keyboard_enter,
+  .leave = &keyboard_leave,
+  .key = &noop,
+  .modifiers = &noop,
+  .repeat_info = &noop,
+};
+
+static struct wl_pointer_listener wl_pointer_listener = {
+  .enter = &pointer_enter,
+  .leave = &pointer_leave,
+  .motion = &pointer_motion,
+  .button = &pointer_button,
+  .axis = &pointer_axis,
+  .frame = &noop,
+  .axis_source = &noop,
+  .axis_stop = &noop,
+  .axis_discrete = &noop,
+  .axis_value120 = &noop,
+  .axis_relative_direction = &noop,
+};
+
+static struct zwlr_layer_surface_v1_listener zwlr_layer_surface_v1_listener = {
+  .configure = &configure_surface,
+  .closed = &noop,
+};
+
+static struct wl_buffer_listener wl_buffer_listener = {
+  .release = &release_buffer,
+};
+
+static void handle_global(void *data, struct wl_registry *wl_registry, uint32_t name, const char *interface, uint32_t version)
+{
+  struct waydraw *waydraw = data;
+
+  if(strcmp(interface, wl_compositor_interface.name) == 0)
+  {
+    waydraw->wl_compositor = wl_registry_bind(wl_registry, name, &wl_compositor_interface, version);
+    return;
+  }
+
+  if(strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0)
+  {
+    waydraw->zwlr_layer_shell_v1 = wl_registry_bind(wl_registry, name, &zwlr_layer_shell_v1_interface, version);
+    return;
+  }
+
+  if(strcmp(interface, wl_shm_interface.name) == 0)
+  {
+    waydraw->wl_shm = wl_registry_bind(wl_registry, name, &wl_shm_interface, version);
+    return;
+  }
+
+  if(strcmp(interface, wl_output_interface.name) == 0)
+  {
+    handle_output(waydraw, wl_registry_bind(wl_registry, name, &wl_output_interface, version));
+    return;
+  }
+
+  if(strcmp(interface, wl_seat_interface.name) == 0)
+  {
+    handle_seat(waydraw, wl_registry_bind(wl_registry, name, &wl_seat_interface, version));
+    return;
+  }
+}
+
+static void handle_output(struct waydraw *waydraw, struct wl_output *wl_output)
+{
+  struct waydraw_output *output = calloc(1, sizeof *output);
+  output->waydraw = waydraw;
+  output->wl_output = wl_output;
+  wl_list_insert(&waydraw->outputs, &output->link);
+
+  if(waydraw->initialized)
+    init_output(output);
+}
+
+static void handle_seat(struct waydraw *waydraw, struct wl_seat *wl_seat)
+{
+  waydraw->seat.wl_seat = wl_seat;
+  wl_seat_add_listener(waydraw->seat.wl_seat, &wl_seat_listener, &waydraw->seat);
+}
+
+static void init_output(struct waydraw_output *output)
+{
+  struct waydraw *waydraw = output->waydraw;
+
+  output->wl_surface = wl_compositor_create_surface(waydraw->wl_compositor);
+  wl_surface_set_user_data(output->wl_surface, output);
+
+  output->zwlr_layer_surface_v1 = zwlr_layer_shell_v1_get_layer_surface(
+      waydraw->zwlr_layer_shell_v1,
+      output->wl_surface,
+      output->wl_output,
+      ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
+      "waydraw");
+
+  zwlr_layer_surface_v1_add_listener(output->zwlr_layer_surface_v1, &zwlr_layer_surface_v1_listener, output);
+
+  zwlr_layer_surface_v1_set_keyboard_interactivity(output->zwlr_layer_surface_v1, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+  zwlr_layer_surface_v1_set_exclusive_zone(output->zwlr_layer_surface_v1, -1);
+  zwlr_layer_surface_v1_set_anchor(output->zwlr_layer_surface_v1,
+      ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
+      ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
+      ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
+      ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
+
+  wl_surface_commit(output->wl_surface);
+}
+
+static void update_output(struct waydraw_output *output, int32_t damage_x, int32_t damage_y, int32_t damage_width, int32_t damage_height)
+{
+  struct wl_buffer *buffer = create_buffer(output->waydraw, output->width, output->height, output->data);
+  wl_surface_attach(output->wl_surface, buffer, 0, 0);
+  wl_surface_damage_buffer(output->wl_surface, damage_x, damage_y, damage_width, damage_height);
+  wl_surface_commit(output->wl_surface);
+}
+
+static void seat_capabilities(void *data, struct wl_seat *wl_seat, uint32_t capabilities)
+{
+  struct waydraw_seat *seat = data;
+
+  if(seat->wl_keyboard)
+    wl_keyboard_destroy(seat->wl_keyboard);
+
+  if(seat->wl_pointer)
+    wl_pointer_destroy(seat->wl_pointer);
+
+  if(capabilities & WL_SEAT_CAPABILITY_KEYBOARD)
+  {
+    seat->wl_keyboard = wl_seat_get_keyboard(wl_seat);
+    wl_keyboard_add_listener(seat->wl_keyboard, &wl_keyboard_listener, seat);
+  }
+  else
+    seat->wl_keyboard = NULL;
+
+  if(capabilities & WL_SEAT_CAPABILITY_POINTER)
+  {
+    seat->wl_pointer = wl_seat_get_pointer(wl_seat);
+    wl_pointer_add_listener(seat->wl_pointer, &wl_pointer_listener, seat);
+  }
+  else
+    seat->wl_pointer = NULL;
+}
+
+static void keyboard_enter(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, struct wl_surface *surface, struct wl_array *keys)
+{
+  struct waydraw_seat *seat = data;
+  assert(seat->keyboard_focus == NULL);
+  seat->keyboard_focus = wl_surface_get_user_data(surface);
+}
+
+static void keyboard_leave(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, struct wl_surface *surface)
+{
+  struct waydraw_seat *seat = data;
+  assert(seat->keyboard_focus == wl_surface_get_user_data(surface));
+  seat->keyboard_focus = NULL;
+}
+
+static void pointer_enter(void *data, struct wl_pointer *wl_pointer, uint32_t serial, struct wl_surface *surface, wl_fixed_t surface_x, wl_fixed_t surface_y)
+{
+  struct waydraw_seat *seat = data;
+  assert(seat->pointer_focus == NULL);
+  seat->pointer_focus = wl_surface_get_user_data(surface);
+}
+
+static void pointer_leave(void *data, struct wl_pointer *wl_pointer, uint32_t serial, struct wl_surface *surface)
+{
+  struct waydraw_seat *seat = data;
+  assert(seat->pointer_focus == wl_surface_get_user_data(surface));
+  seat->pointer_focus = NULL;
+}
+
+static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t time, wl_fixed_t surface_x, wl_fixed_t surface_y)
+{
+  struct waydraw_seat *seat = data;
+  struct waydraw_output *output = seat->pointer_focus;
+  assert(output);
+
+  if(seat->drawing)
+  {
+    int x = wl_fixed_to_int(surface_x);
+    int y = wl_fixed_to_int(surface_y);
+
+    if(output->width == 0 || output->height == 0)
+      return;
+
+    if(x < 0)
+      x = 0;
+    else if((unsigned)x >= output->width)
+      x = output->width - 1;
+
+    if(y < 0)
+      y = 0;
+    else if((unsigned)y >= output->height)
+      y = output->height - 1;
+
+    draw_circle(output->data, output->width, output->height, x, y, seat->radius, seat->color);
+    update_output(output, x - seat->radius, y - seat->radius, 2 * seat->radius + 1, 2 * seat->radius + 1);
+  }
+}
+
+static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t serial, uint32_t time, uint32_t button, uint32_t state)
+{
+  struct waydraw_seat *seat = data;
+  if(button == BTN_LEFT)
+    seat->drawing = state == WL_POINTER_BUTTON_STATE_PRESSED;
+}
+
+static void pointer_axis(void *data, struct wl_pointer *wl_pointer, uint32_t time, uint32_t axis, wl_fixed_t value)
+{
+  struct waydraw_seat *seat = data;
+  if(axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
+  {
+    seat->radius += wl_fixed_to_double(value) * SCROLL_SENSITIVITY;
+    if(seat->radius < MIN_DRAW_RADIUS)
+      seat->radius = MIN_DRAW_RADIUS;
+  }
+}
+
+static void configure_surface(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1, uint32_t serial, uint32_t width, uint32_t height)
+{
+  zwlr_layer_surface_v1_ack_configure(zwlr_layer_surface_v1, serial);
+
+  struct waydraw_output *output = data;
+  output->width = width;
+  output->height = height;
+  output->data = calloc(width * height, sizeof *output->data);
+  update_output(output, 0, 0, output->width, output->height);
+}
+
+static void release_buffer(void *data, struct wl_buffer *wl_buffer)
+{
+  (void)data;
+  wl_buffer_destroy(wl_buffer);
+}
+
+static struct wl_buffer *create_buffer(const struct waydraw *waydraw, uint32_t width, uint32_t height, void *data)
+{
+  uint32_t size = width * height * 4;
+
+  int fd = allocate_shm_file(size);
+  if(fd < 0)
+  {
+    fprintf(stderr, "error: failed to open shm file: %s", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  void *storage = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+  if(!storage)
+  {
+    fprintf(stderr, "error: failed to mmap shm file: %s", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  memcpy(storage, data, size);
+
+  struct wl_shm_pool *wl_shm_pool = wl_shm_create_pool(waydraw->wl_shm, fd, size);
+  struct wl_buffer *wl_buffer = wl_shm_pool_create_buffer(wl_shm_pool, 0, width, height, width * 4, WL_SHM_FORMAT_ARGB8888);
+  wl_buffer_add_listener(wl_buffer, &wl_buffer_listener, NULL);
+
+  wl_shm_pool_destroy(wl_shm_pool);
+  munmap(storage, size);
+  close(fd);
+
+  return wl_buffer;
+}
+
+int main(void)
+{
+  struct waydraw waydraw = {0};
+
+  wl_list_init(&waydraw.outputs);
+
+  waydraw.seat.radius = 10;
+  waydraw.seat.color = 0xFFFFFFFF;
+
+  waydraw.wl_display = wl_display_connect(NULL);
+  if(!waydraw.wl_display)
+  {
+    fprintf(stderr, "error: failed to connect to wayland display\n");
+    exit(EXIT_FAILURE);
+  }
+
+  struct wl_registry *registry = wl_display_get_registry(waydraw.wl_display);
+  if(!registry)
+  {
+    fprintf(stderr, "error: failed to get wayland registry\n");
+    exit(EXIT_FAILURE);
+  }
+
+  wl_registry_add_listener(registry, &wl_registry_listener, &waydraw);
+  wl_display_roundtrip(waydraw.wl_display);
+
+  if(!waydraw.wl_compositor)
+  {
+    fprintf(stderr, "error: missing wl_compositor\n");
+    exit(EXIT_FAILURE);
+  }
+
+  if(!waydraw.wl_shm)
+  {
+    fprintf(stderr, "error: missing ml_shm\n");
+    exit(EXIT_FAILURE);
+  }
+
+  if(!waydraw.zwlr_layer_shell_v1)
+  {
+    fprintf(stderr, "error: missing zwlr_layer_shell_v1\n");
+    exit(EXIT_FAILURE);
+  }
+
+  waydraw.initialized = true;
+
+  struct waydraw_output *output;
+  wl_list_for_each(output, &waydraw.outputs, link)
+    init_output(output);
+
+  while(wl_display_dispatch(waydraw.wl_display))
+    ;
+
+  wl_display_disconnect(waydraw.wl_display);
+  return 0;
+}
+
