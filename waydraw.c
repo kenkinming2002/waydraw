@@ -502,6 +502,8 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
         );
         cairo_set_line_width(seat->cairo, seat->weight * 2 + 1);
         cairo_set_line_cap(seat->cairo, CAIRO_LINE_CAP_ROUND);
+        cairo_set_line_join(seat->cairo, CAIRO_LINE_JOIN_ROUND);
+
         cairo_new_path(seat->cairo);
         cairo_move_to(seat->cairo, seat->x, seat->y);
       }
