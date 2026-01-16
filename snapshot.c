@@ -28,7 +28,7 @@ void snapshot_map(struct snapshot *snapshot, uint32_t *width, uint32_t *height, 
   cairo_surface_flush(snapshot->current->cairo_surface);
   *width = cairo_image_surface_get_width(cairo_surface);
   *height = cairo_image_surface_get_height(cairo_surface);
-  *data = cairo_image_surface_get_data(cairo_surface);
+  *data = (uint32_t *)cairo_image_surface_get_data(cairo_surface);
 }
 
 static cairo_surface_t *cairo_image_surface_clone(cairo_surface_t *surface)
@@ -37,10 +37,10 @@ static cairo_surface_t *cairo_image_surface_clone(cairo_surface_t *surface)
 
   uint32_t width = cairo_image_surface_get_width(surface);
   uint32_t height = cairo_image_surface_get_height(surface);
-  uint32_t *data = cairo_image_surface_get_data(surface);
+  uint32_t *data = (uint32_t *)cairo_image_surface_get_data(surface);
 
   cairo_surface_t *new_surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
-  uint32_t *new_data = cairo_image_surface_get_data(new_surface);
+  uint32_t *new_data = (uint32_t *)cairo_image_surface_get_data(new_surface);
   memcpy(new_data, data, width * height * sizeof *data);
   cairo_surface_mark_dirty(new_surface);
   return new_surface;

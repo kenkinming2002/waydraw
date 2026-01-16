@@ -110,6 +110,9 @@ static void release_buffer(void *data, struct wl_buffer *wl_buffer);
 
 static struct wl_buffer *create_buffer(const struct waydraw *waydraw, uint32_t width, uint32_t height, void *data);
 
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored  "-Wincompatible-pointer-types"
+
 static void noop() {}
 
 static struct wl_registry_listener wl_registry_listener = {
@@ -153,6 +156,8 @@ static struct zwlr_layer_surface_v1_listener zwlr_layer_surface_v1_listener = {
 static struct wl_buffer_listener wl_buffer_listener = {
   .release = &release_buffer,
 };
+
+#pragma GCC diagnostic pop
 
 static void handle_global(void *data, struct wl_registry *wl_registry, uint32_t name, const char *interface, uint32_t version)
 {

@@ -35,5 +35,4 @@ exe = executable(
   wayland_protocols,
   dependencies : dependencies,
   install : true,
-  c_args: '-Wno-incompatible-pointer-types'
 )
