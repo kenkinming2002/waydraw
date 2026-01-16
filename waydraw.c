@@ -517,14 +517,14 @@ static struct wl_buffer *create_buffer(const struct waydraw *waydraw, uint32_t w
   int fd = allocate_shm_file(size);
   if(fd < 0)
   {
-    fprintf(stderr, "error: failed to open shm file: %s", strerror(errno));
+    fprintf(stderr, "error: failed to open shm file: %s\n", strerror(errno));
     exit(EXIT_FAILURE);
   }
 
   void *storage = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
   if(storage == MAP_FAILED)
   {
-    fprintf(stderr, "error: failed to mmap shm file: %s", strerror(errno));
+    fprintf(stderr, "error: failed to mmap shm file: %s\n", strerror(errno));
     exit(EXIT_FAILURE);
   }
 
