@@ -501,11 +501,8 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
             COLOR_PALLETE[seat->color_index][3]
         );
         cairo_set_line_width(seat->cairo, seat->weight * 2 + 1);
-
         cairo_new_path(seat->cairo);
-        cairo_line_to(seat->cairo, seat->x, seat->y);
-        cairo_stroke_preserve(seat->cairo);
-        update_output(seat->drawing_focus);
+        cairo_move_to(seat->cairo, seat->x, seat->y);
       }
       break;
     case WL_POINTER_BUTTON_STATE_RELEASED:
