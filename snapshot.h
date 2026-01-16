@@ -12,40 +12,12 @@
 //   - a linked list to support earlier/later command
 //   - a tree to support undo/redo command
 
-#include "list.h"
-
 #include <cairo.h>
 
 #include <wayland-util.h>
 
 #include <stdint.h>
 #include <stddef.h>
-
-//enum snapshot_style
-//{
-//  SNAPSHOT_STYLE_SOLID,
-//  SNAPSHOT_STYLE_DOTTED,
-//};
-//
-//struct snapshot_color
-//{
-//  double r, g, b, a;
-//};
-//
-//struct snapshot_point
-//{
-//  double x, y;
-//};
-//
-//struct snapshot_stroke
-//{
-//  enum snapshot_style style;
-//  struct snapshot_color color;
-//
-//  struct snapshot_point *items;
-//  size_t count;
-//  size_t capacity;
-//};
 
 struct snapshot_node
 {
