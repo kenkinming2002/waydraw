@@ -25,7 +25,6 @@ dependencies = [
 sources = [
   'waydraw.c',
   'shm.c',
-  'draw.c',
   'snapshot.c',
 ]
 

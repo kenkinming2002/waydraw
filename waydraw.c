@@ -1,4 +1,3 @@
-#include "draw.h"
 #include "snapshot.h"
 #include "shm.h"
 
@@ -265,24 +264,30 @@ static void update_curosr(struct waydraw_seat *seat)
 {
   struct waydraw *waydraw = wl_container_of(seat, waydraw, seat);
 
-  uint32_t r = COLOR_PALLETE[seat->color_index][0] * 255.0;
-  uint32_t g = COLOR_PALLETE[seat->color_index][1] * 255.0;
-  uint32_t b = COLOR_PALLETE[seat->color_index][2] * 255.0;
-  uint32_t a = COLOR_PALLETE[seat->color_index][3] * 255.0;
-
-  uint32_t color = a << 24
-                 | r << 16
-                 | g << 8
-                 | b << 0;
-
   size_t size = seat->weight * 2 + 1;
-  uint32_t *data = calloc(size * size, sizeof *data);
-  draw_circle(data, size, size, seat->weight, seat->weight, seat->weight, 1, color);
+
+  cairo_surface_t *cairo_surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
+  cairo_t *cairo = cairo_create(cairo_surface);
+  cairo_set_source_rgba(cairo,
+      COLOR_PALLETE[seat->color_index][0],
+      COLOR_PALLETE[seat->color_index][1],
+      COLOR_PALLETE[seat->color_index][2],
+      COLOR_PALLETE[seat->color_index][3]
+  );
+  cairo_set_line_width(cairo, 3);
+  cairo_arc(cairo, seat->weight, seat->weight, seat->weight, 0, 2*M_PI);
+  cairo_fill(cairo);
+  cairo_surface_flush(cairo_surface);
+
+  uint32_t *data = (uint32_t *)cairo_image_surface_get_data(cairo_surface);
 
   struct wl_buffer *buffer = create_buffer(waydraw, size, size, data);
   wl_surface_attach(seat->wl_pointer_surface, buffer, 0, 0);
   wl_surface_damage_buffer(seat->wl_pointer_surface, 0, 0, size, size);
   wl_surface_commit(seat->wl_pointer_surface);
+
+  cairo_destroy(cairo);
+  cairo_surface_destroy(cairo_surface);
 }
 
 static void seat_capabilities(void *data, struct wl_seat *wl_seat, uint32_t capabilities)
