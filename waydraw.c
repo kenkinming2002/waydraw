@@ -29,6 +29,17 @@
 #define SCROLL_SENSITIVITY 0.1
 #define MIN_DRAW_RADIUS 1
 
+static double COLOR_PALLETE[][4] = {
+  { 1.0, 0.0, 0.0, 1.0, },
+  { 0.0, 1.0, 0.0, 1.0, },
+  { 0.0, 0.0, 1.0, 1.0, },
+  { 1.0, 1.0, 0.0, 1.0, },
+  { 1.0, 0.0, 1.0, 1.0, },
+  { 0.0, 1.0, 1.0, 1.0, },
+};
+
+#define COLOR_PALLETE_SIZE (sizeof COLOR_PALLETE / sizeof COLOR_PALLETE[0])
+
 struct waydraw_output
 {
   struct waydraw *waydraw;
@@ -58,7 +69,7 @@ struct waydraw_seat
   struct waydraw_output *pointer_focus;
 
   double x, y;
-  double r, g, b, a;
+  unsigned color_index;
   int32_t weight;
 
   struct waydraw_output *drawing_focus;
@@ -254,9 +265,19 @@ static void update_curosr(struct waydraw_seat *seat)
 {
   struct waydraw *waydraw = wl_container_of(seat, waydraw, seat);
 
+  uint32_t r = COLOR_PALLETE[seat->color_index][0] * 255.0;
+  uint32_t g = COLOR_PALLETE[seat->color_index][1] * 255.0;
+  uint32_t b = COLOR_PALLETE[seat->color_index][2] * 255.0;
+  uint32_t a = COLOR_PALLETE[seat->color_index][3] * 255.0;
+
+  uint32_t color = a << 24
+                 | r << 16
+                 | g << 8
+                 | b << 0;
+
   size_t size = seat->weight * 2 + 1;
   uint32_t *data = calloc(size * size, sizeof *data);
-  draw_circle(data, size, size, seat->weight, seat->weight, seat->weight, 1, 0xFFFFFFFF);
+  draw_circle(data, size, size, seat->weight, seat->weight, seat->weight, 1, color);
 
   struct wl_buffer *buffer = create_buffer(waydraw, size, size, data);
   wl_surface_attach(seat->wl_pointer_surface, buffer, 0, 0);
@@ -393,6 +414,20 @@ static void handle_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t ser
         update_output(output);
       }
       break;
+    case XKB_KEY_ISO_Left_Tab: // This is shift-tab. Don't ask me why.
+      if(seat->color_index == 0)
+        seat->color_index = COLOR_PALLETE_SIZE - 1;
+      else
+        seat->color_index -= 1;
+      update_curosr(seat);
+      break;
+    case XKB_KEY_Tab:
+      if(seat->color_index == COLOR_PALLETE_SIZE - 1)
+        seat->color_index = 0;
+      else
+        seat->color_index += 1;
+      update_curosr(seat);
+      break;
     case XKB_KEY_q:
       exit(EXIT_SUCCESS);
       break;
@@ -459,7 +494,12 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
         snapshot_push(seat->drawing_focus->snapshot);
 
         seat->cairo = cairo_create(seat->drawing_focus->snapshot->current->cairo_surface);
-        cairo_set_source_rgba(seat->cairo, seat->r, seat->g, seat->b, seat->a);
+        cairo_set_source_rgba(seat->cairo,
+            COLOR_PALLETE[seat->color_index][0],
+            COLOR_PALLETE[seat->color_index][1],
+            COLOR_PALLETE[seat->color_index][2],
+            COLOR_PALLETE[seat->color_index][3]
+        );
         cairo_set_line_width(seat->cairo, 10.0);
 
         cairo_new_path(seat->cairo);
@@ -553,10 +593,7 @@ int main(void)
   wl_list_init(&waydraw.outputs);
 
   waydraw.seat.weight = 10;
-  waydraw.seat.r = 1.0;
-  waydraw.seat.g = 1.0;
-  waydraw.seat.b = 1.0;
-  waydraw.seat.a = 1.0;
+  waydraw.seat.color_index = 0;
 
   waydraw.seat.xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
   if(!waydraw.seat.xkb_context)
