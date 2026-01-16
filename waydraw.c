@@ -1,9 +1,12 @@
 #include "draw.h"
+#include "snapshot.h"
 #include "shm.h"
 
 #include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
 #include <wayland-client.h>
+
+#include <xkbcommon/xkbcommon.h>
 
 #include <wayland-util.h>
 #include <xdg-shell-client-protocol.h>
@@ -36,9 +39,7 @@ struct waydraw_output
   struct wl_surface *wl_surface;
   struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1;
 
-  uint32_t width;
-  uint32_t height;
-  uint32_t *data;
+  struct snapshot *snapshot;
 };
 
 struct waydraw_seat
@@ -46,16 +47,22 @@ struct waydraw_seat
   struct wl_seat *wl_seat;
 
   struct wl_keyboard *wl_keyboard;
+
+  struct xkb_context *xkb_context;
+  struct xkb_state *xkb_state;
+
   struct wl_pointer *wl_pointer;
   struct wl_surface *wl_pointer_surface;
 
   struct waydraw_output *keyboard_focus;
   struct waydraw_output *pointer_focus;
 
-  bool drawing;
   double x, y;
-  uint32_t color;
-  int32_t radius;
+  double r, g, b, a;
+  int32_t weight;
+
+  struct waydraw_output *drawing_focus;
+  cairo_t *cairo;
 };
 
 struct waydraw
@@ -78,7 +85,7 @@ static void handle_output(struct waydraw *waydraw, struct wl_output *wl_output);
 static void handle_seat(struct waydraw *waydraw, struct wl_seat *wl_seat);
 
 static void init_output(struct waydraw_output *output);
-static void update_output(struct waydraw_output *output, int32_t damage_x, int32_t damage_y, int32_t damage_width, int32_t damage_height);
+static void update_output(struct waydraw_output *output);
 
 static void update_curosr(struct waydraw_seat *seat);
 
@@ -87,15 +94,16 @@ static void seat_capabilities(void *data, struct wl_seat *wl_seat, uint32_t capa
 static void keyboard_enter(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, struct wl_surface *surface, struct wl_array *keys);
 static void keyboard_leave(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, struct wl_surface *surface);
 
+static void handle_keymap(void *data, struct wl_keyboard *wl_keyboard, uint32_t format, int32_t fd, uint32_t size);
+static void handle_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, uint32_t time, uint32_t key, uint32_t state);
+static void handle_modifiers(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked, uint32_t group);
+
 static void pointer_enter(void *data, struct wl_pointer *wl_pointer, uint32_t serial, struct wl_surface *surface, wl_fixed_t surface_x, wl_fixed_t surface_y);
 static void pointer_leave(void *data, struct wl_pointer *wl_pointer, uint32_t serial, struct wl_surface *surface);
 
 static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t time, wl_fixed_t surface_x, wl_fixed_t surface_y);
 static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t serial, uint32_t time, uint32_t button, uint32_t state);
 static void pointer_axis(void *data, struct wl_pointer *wl_pointer, uint32_t time, uint32_t axis, wl_fixed_t value);
-
-static void stroke_begin(struct waydraw_seat *seat);
-static void stroke_to(struct waydraw_seat *seat, double x, double y);
 
 static void configure_surface(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1, uint32_t serial, uint32_t width, uint32_t height);
 static void release_buffer(void *data, struct wl_buffer *wl_buffer);
@@ -115,11 +123,11 @@ static struct wl_seat_listener wl_seat_listener = {
 };
 
 static struct wl_keyboard_listener wl_keyboard_listener = {
-  .keymap = &noop,
+  .keymap = &handle_keymap,
   .enter = &keyboard_enter,
   .leave = &keyboard_leave,
-  .key = &noop,
-  .modifiers = &noop,
+  .key = &handle_key,
+  .modifiers = &handle_modifiers,
   .repeat_info = &noop,
 };
 
@@ -214,7 +222,7 @@ static void init_output(struct waydraw_output *output)
 
   zwlr_layer_surface_v1_add_listener(output->zwlr_layer_surface_v1, &zwlr_layer_surface_v1_listener, output);
 
-  zwlr_layer_surface_v1_set_keyboard_interactivity(output->zwlr_layer_surface_v1, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+  zwlr_layer_surface_v1_set_keyboard_interactivity(output->zwlr_layer_surface_v1, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
   zwlr_layer_surface_v1_set_exclusive_zone(output->zwlr_layer_surface_v1, -1);
   zwlr_layer_surface_v1_set_anchor(output->zwlr_layer_surface_v1,
       ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
@@ -225,11 +233,15 @@ static void init_output(struct waydraw_output *output)
   wl_surface_commit(output->wl_surface);
 }
 
-static void update_output(struct waydraw_output *output, int32_t damage_x, int32_t damage_y, int32_t damage_width, int32_t damage_height)
+static void update_output(struct waydraw_output *output)
 {
-  struct wl_buffer *buffer = create_buffer(output->waydraw, output->width, output->height, output->data);
+  uint32_t width, height;
+  uint32_t *data;
+  snapshot_map(output->snapshot, &width, &height, &data);
+
+  struct wl_buffer *buffer = create_buffer(output->waydraw, width, height, data);
   wl_surface_attach(output->wl_surface, buffer, 0, 0);
-  wl_surface_damage_buffer(output->wl_surface, damage_x, damage_y, damage_width, damage_height);
+  wl_surface_damage_buffer(output->wl_surface, 0, 0, width, height);
   wl_surface_commit(output->wl_surface);
 }
 
@@ -237,9 +249,9 @@ static void update_curosr(struct waydraw_seat *seat)
 {
   struct waydraw *waydraw = wl_container_of(seat, waydraw, seat);
 
-  size_t size = seat->radius * 2 + 1;
+  size_t size = seat->weight * 2 + 1;
   uint32_t *data = calloc(size * size, sizeof *data);
-  draw_circle(data, size, size, seat->radius, seat->radius, seat->radius, 1, seat->color);
+  draw_circle(data, size, size, seat->weight, seat->weight, seat->weight, 1, 0xFFFFFFFF);
 
   struct wl_buffer *buffer = create_buffer(waydraw, size, size, data);
   wl_surface_attach(seat->wl_pointer_surface, buffer, 0, 0);
@@ -296,6 +308,100 @@ static void keyboard_leave(void *data, struct wl_keyboard *wl_keyboard, uint32_t
   seat->keyboard_focus = NULL;
 }
 
+static void handle_keymap(void *data, struct wl_keyboard *wl_keyboard, uint32_t format, int32_t fd, uint32_t size)
+{
+  struct waydraw_seat *seat = data;
+
+  if(seat->xkb_state)
+    xkb_state_unref(seat->xkb_state);
+
+  assert(format == WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1);
+
+  char *map_shm = mmap(NULL, size, PROT_READ, MAP_PRIVATE, fd, 0);
+  if(map_shm == MAP_FAILED)
+  {
+    fprintf(stderr, "error: failed to mmap keymap file: %s\n", strerror(errno));
+    exit(EXIT_FAILURE);
+  }
+
+  struct xkb_keymap *xkb_keymap = xkb_keymap_new_from_string(
+      seat->xkb_context,
+      map_shm,
+      XKB_KEYMAP_FORMAT_TEXT_V1,
+      XKB_KEYMAP_COMPILE_NO_FLAGS);
+
+  if(!xkb_keymap)
+  {
+    fprintf(stderr, "error: failed to parse keymap file\n");
+    exit(EXIT_FAILURE);
+  }
+
+  seat->xkb_state = xkb_state_new(xkb_keymap);
+  if(!seat->xkb_state)
+  {
+    fprintf(stderr, "error: failed to create xkb state from keymap\n");
+    exit(EXIT_FAILURE);
+  }
+
+  xkb_keymap_unref(xkb_keymap);
+  munmap(map_shm, size);
+  close(fd);
+}
+
+static void handle_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, uint32_t time, uint32_t key, uint32_t state)
+{
+  struct waydraw_seat *seat = data;
+  struct waydraw_output *output = seat->keyboard_focus;
+  assert(seat->xkb_state);
+  assert(output);
+
+  if(state == WL_KEYBOARD_KEY_STATE_PRESSED)
+  {
+    xkb_keysym_t sym = xkb_state_key_get_one_sym(seat->xkb_state, key + 8);
+    switch(sym)
+    {
+    case XKB_KEY_z:
+      if(xkb_state_mod_name_is_active(seat->xkb_state, "Control", XKB_STATE_MODS_EFFECTIVE))
+      {
+        snapshot_undo(output->snapshot);
+        update_output(output);
+      }
+      break;
+    case XKB_KEY_Z:
+      if(xkb_state_mod_name_is_active(seat->xkb_state, "Control", XKB_STATE_MODS_EFFECTIVE))
+      {
+        snapshot_redo(output->snapshot);
+        update_output(output);
+      }
+      break;
+    case XKB_KEY_x:
+      if(xkb_state_mod_name_is_active(seat->xkb_state, "Control", XKB_STATE_MODS_EFFECTIVE))
+      {
+        snapshot_earlier(output->snapshot);
+        update_output(output);
+      }
+      break;
+    case XKB_KEY_X:
+      if(xkb_state_mod_name_is_active(seat->xkb_state, "Control", XKB_STATE_MODS_EFFECTIVE))
+      {
+        snapshot_later(output->snapshot);
+        update_output(output);
+      }
+      break;
+    case XKB_KEY_q:
+      exit(EXIT_SUCCESS);
+      break;
+    }
+  }
+}
+
+static void handle_modifiers(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked, uint32_t group)
+{
+  struct waydraw_seat *seat = data;
+  assert(seat->xkb_state);
+  xkb_state_update_mask(seat->xkb_state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
+}
+
 static void pointer_enter(void *data, struct wl_pointer *wl_pointer, uint32_t serial, struct wl_surface *surface, wl_fixed_t surface_x, wl_fixed_t surface_y)
 {
   struct waydraw_seat *seat = data;
@@ -305,7 +411,7 @@ static void pointer_enter(void *data, struct wl_pointer *wl_pointer, uint32_t se
   seat->x = wl_fixed_to_double(surface_x);
   seat->y = wl_fixed_to_double(surface_y);
 
-  wl_pointer_set_cursor(wl_pointer, serial, seat->wl_pointer_surface, seat->radius, seat->radius);
+  wl_pointer_set_cursor(wl_pointer, serial, seat->wl_pointer_surface, seat->weight, seat->weight);
   update_curosr(seat);
 }
 
@@ -322,12 +428,15 @@ static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t t
   struct waydraw_output *output = seat->pointer_focus;
   assert(output);
 
-  if(seat->drawing)
-    stroke_to(seat, wl_fixed_to_int(surface_x), wl_fixed_to_int(surface_y));
-
   seat->x = wl_fixed_to_double(surface_x);
   seat->y = wl_fixed_to_double(surface_y);
 
+  if(seat->drawing_focus)
+  {
+    cairo_line_to(seat->cairo, seat->x, seat->y);
+    cairo_stroke_preserve(seat->cairo);
+    update_output(seat->drawing_focus);
+  }
 }
 
 static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t serial, uint32_t time, uint32_t button, uint32_t state)
@@ -337,11 +446,31 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
     switch(state)
     {
     case WL_POINTER_BUTTON_STATE_PRESSED:
-      seat->drawing = true;
-      stroke_begin(seat);
+      // Do not allow drawing across outputs in a single stroke.
+      if(!seat->drawing_focus)
+      {
+        seat->drawing_focus = seat->pointer_focus;
+
+        snapshot_push(seat->drawing_focus->snapshot);
+
+        seat->cairo = cairo_create(seat->drawing_focus->snapshot->current->cairo_surface);
+        cairo_set_source_rgba(seat->cairo, seat->r, seat->g, seat->b, seat->a);
+        cairo_set_line_width(seat->cairo, 10.0);
+
+        cairo_new_path(seat->cairo);
+        cairo_line_to(seat->cairo, seat->x, seat->y);
+        cairo_stroke_preserve(seat->cairo);
+        update_output(seat->drawing_focus);
+      }
       break;
     case WL_POINTER_BUTTON_STATE_RELEASED:
-      seat->drawing = false;
+      if(seat->drawing_focus)
+      {
+        cairo_destroy(seat->cairo);
+
+        seat->cairo = NULL;
+        seat->drawing_focus = NULL;
+      }
       break;
     }
 }
@@ -351,40 +480,16 @@ static void pointer_axis(void *data, struct wl_pointer *wl_pointer, uint32_t tim
   struct waydraw_seat *seat = data;
   if(axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
   {
-    int32_t old_radius = seat->radius;
+    int32_t old_radius = seat->weight;
 
-    seat->radius += wl_fixed_to_double(value) * SCROLL_SENSITIVITY;
-    if(seat->radius < MIN_DRAW_RADIUS)
-      seat->radius = MIN_DRAW_RADIUS;
+    seat->weight += wl_fixed_to_double(value) * SCROLL_SENSITIVITY;
+    if(seat->weight < MIN_DRAW_RADIUS)
+      seat->weight = MIN_DRAW_RADIUS;
 
-    int32_t offset = old_radius - seat->radius;
+    int32_t offset = old_radius - seat->weight;
     wl_surface_offset(seat->wl_pointer_surface, offset, offset);
     update_curosr(seat);
   }
-}
-
-static void stroke_begin(struct waydraw_seat *seat)
-{
-  struct waydraw_output *output = seat->pointer_focus;
-  assert(output);
-
-  draw_sphere(output->data, output->width, output->height, seat->x, seat->y, seat->radius, seat->color);
-  update_output(output, seat->x - seat->radius, seat->y - seat->radius, 2 * seat->radius + 1, 2 * seat->radius + 1);
-}
-
-static void stroke_to(struct waydraw_seat *seat, double x, double y)
-{
-  struct waydraw_output *output = seat->pointer_focus;
-  assert(output);
-
-  double length = ceilf(sqrt((seat->x - x) * (seat->x - x) + (seat->y - y) * (seat->y - y)));
-  for(unsigned i=0; i<=length; ++i)
-  {
-    double stroke_x = seat->x + (x - seat->x) * i / length;
-    double stroke_y = seat->y + (y - seat->y) * i / length;
-    draw_sphere(output->data, output->width, output->height, stroke_x, stroke_y, seat->radius, seat->color);
-  }
-  update_output(output, 0, 0, output->width, output->height);
 }
 
 static void configure_surface(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1, uint32_t serial, uint32_t width, uint32_t height)
@@ -392,10 +497,11 @@ static void configure_surface(void *data, struct zwlr_layer_surface_v1 *zwlr_lay
   zwlr_layer_surface_v1_ack_configure(zwlr_layer_surface_v1, serial);
 
   struct waydraw_output *output = data;
-  output->width = width;
-  output->height = height;
-  output->data = calloc(width * height, sizeof *output->data);
-  update_output(output, 0, 0, output->width, output->height);
+  if(!output->snapshot)
+  {
+    output->snapshot = snapshot_new(width, height);
+    update_output(output);
+  }
 }
 
 static void release_buffer(void *data, struct wl_buffer *wl_buffer)
@@ -416,7 +522,7 @@ static struct wl_buffer *create_buffer(const struct waydraw *waydraw, uint32_t w
   }
 
   void *storage = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  if(!storage)
+  if(storage == MAP_FAILED)
   {
     fprintf(stderr, "error: failed to mmap shm file: %s", strerror(errno));
     exit(EXIT_FAILURE);
@@ -441,8 +547,18 @@ int main(void)
 
   wl_list_init(&waydraw.outputs);
 
-  waydraw.seat.radius = 10;
-  waydraw.seat.color = 0xFFFFFFFF;
+  waydraw.seat.weight = 10;
+  waydraw.seat.r = 1.0;
+  waydraw.seat.g = 1.0;
+  waydraw.seat.b = 1.0;
+  waydraw.seat.a = 1.0;
+
+  waydraw.seat.xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+  if(!waydraw.seat.xkb_context)
+  {
+    fprintf(stderr, "error: failed to create xkb context\n");
+    exit(EXIT_FAILURE);
+  }
 
   waydraw.wl_display = wl_display_connect(NULL);
   if(!waydraw.wl_display)

@@ -13,14 +13,20 @@ wayland_protocols = wayland_mod.scan_xml([
   'protocols/wlr-layer-shell-unstable-v1.xml',
 ])
 
+xkbcommon_dep = dependency('xkbcommon')
+cairo_dep = dependency('cairo')
+
 dependencies = [
   wayland_client_dep,
+  xkbcommon_dep,
+  cairo_dep,
 ]
 
 sources = [
   'waydraw.c',
   'shm.c',
   'draw.c',
+  'snapshot.c',
 ]
 
 exe = executable(
