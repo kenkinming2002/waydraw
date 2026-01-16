@@ -53,6 +53,7 @@ struct waydraw_seat
   struct waydraw_output *pointer_focus;
 
   bool drawing;
+  double x, y;
   uint32_t color;
   int32_t radius;
 };
@@ -92,6 +93,9 @@ static void pointer_leave(void *data, struct wl_pointer *wl_pointer, uint32_t se
 static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t time, wl_fixed_t surface_x, wl_fixed_t surface_y);
 static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t serial, uint32_t time, uint32_t button, uint32_t state);
 static void pointer_axis(void *data, struct wl_pointer *wl_pointer, uint32_t time, uint32_t axis, wl_fixed_t value);
+
+static void stroke_begin(struct waydraw_seat *seat);
+static void stroke_to(struct waydraw_seat *seat, double x, double y);
 
 static void configure_surface(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1, uint32_t serial, uint32_t width, uint32_t height);
 static void release_buffer(void *data, struct wl_buffer *wl_buffer);
@@ -298,6 +302,9 @@ static void pointer_enter(void *data, struct wl_pointer *wl_pointer, uint32_t se
   assert(seat->pointer_focus == NULL);
   seat->pointer_focus = wl_surface_get_user_data(surface);
 
+  seat->x = wl_fixed_to_double(surface_x);
+  seat->y = wl_fixed_to_double(surface_y);
+
   wl_pointer_set_cursor(wl_pointer, serial, seat->wl_pointer_surface, seat->radius, seat->radius);
   update_curosr(seat);
 }
@@ -316,33 +323,27 @@ static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t t
   assert(output);
 
   if(seat->drawing)
-  {
-    int x = wl_fixed_to_int(surface_x);
-    int y = wl_fixed_to_int(surface_y);
+    stroke_to(seat, wl_fixed_to_int(surface_x), wl_fixed_to_int(surface_y));
 
-    if(output->width == 0 || output->height == 0)
-      return;
+  seat->x = wl_fixed_to_double(surface_x);
+  seat->y = wl_fixed_to_double(surface_y);
 
-    if(x < 0)
-      x = 0;
-    else if((unsigned)x >= output->width)
-      x = output->width - 1;
-
-    if(y < 0)
-      y = 0;
-    else if((unsigned)y >= output->height)
-      y = output->height - 1;
-
-    draw_sphere(output->data, output->width, output->height, x, y, seat->radius, seat->color);
-    update_output(output, x - seat->radius, y - seat->radius, 2 * seat->radius + 1, 2 * seat->radius + 1);
-  }
 }
 
 static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t serial, uint32_t time, uint32_t button, uint32_t state)
 {
   struct waydraw_seat *seat = data;
   if(button == BTN_LEFT)
-    seat->drawing = state == WL_POINTER_BUTTON_STATE_PRESSED;
+    switch(state)
+    {
+    case WL_POINTER_BUTTON_STATE_PRESSED:
+      seat->drawing = true;
+      stroke_begin(seat);
+      break;
+    case WL_POINTER_BUTTON_STATE_RELEASED:
+      seat->drawing = false;
+      break;
+    }
 }
 
 static void pointer_axis(void *data, struct wl_pointer *wl_pointer, uint32_t time, uint32_t axis, wl_fixed_t value)
@@ -360,6 +361,30 @@ static void pointer_axis(void *data, struct wl_pointer *wl_pointer, uint32_t tim
     wl_surface_offset(seat->wl_pointer_surface, offset, offset);
     update_curosr(seat);
   }
+}
+
+static void stroke_begin(struct waydraw_seat *seat)
+{
+  struct waydraw_output *output = seat->pointer_focus;
+  assert(output);
+
+  draw_sphere(output->data, output->width, output->height, seat->x, seat->y, seat->radius, seat->color);
+  update_output(output, seat->x - seat->radius, seat->y - seat->radius, 2 * seat->radius + 1, 2 * seat->radius + 1);
+}
+
+static void stroke_to(struct waydraw_seat *seat, double x, double y)
+{
+  struct waydraw_output *output = seat->pointer_focus;
+  assert(output);
+
+  double length = ceilf(sqrt((seat->x - x) * (seat->x - x) + (seat->y - y) * (seat->y - y)));
+  for(unsigned i=0; i<=length; ++i)
+  {
+    double stroke_x = seat->x + (x - seat->x) * i / length;
+    double stroke_y = seat->y + (y - seat->y) * i / length;
+    draw_sphere(output->data, output->width, output->height, stroke_x, stroke_y, seat->radius, seat->color);
+  }
+  update_output(output, 0, 0, output->width, output->height);
 }
 
 static void configure_surface(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1, uint32_t serial, uint32_t width, uint32_t height)
