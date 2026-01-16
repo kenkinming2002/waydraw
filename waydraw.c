@@ -47,6 +47,7 @@ struct waydraw_seat
 
   struct wl_keyboard *wl_keyboard;
   struct wl_pointer *wl_pointer;
+  struct wl_surface *wl_pointer_surface;
 
   struct waydraw_output *keyboard_focus;
   struct waydraw_output *pointer_focus;
@@ -77,6 +78,8 @@ static void handle_seat(struct waydraw *waydraw, struct wl_seat *wl_seat);
 
 static void init_output(struct waydraw_output *output);
 static void update_output(struct waydraw_output *output, int32_t damage_x, int32_t damage_y, int32_t damage_width, int32_t damage_height);
+
+static void update_curosr(struct waydraw_seat *seat);
 
 static void seat_capabilities(void *data, struct wl_seat *wl_seat, uint32_t capabilities);
 
@@ -226,15 +229,33 @@ static void update_output(struct waydraw_output *output, int32_t damage_x, int32
   wl_surface_commit(output->wl_surface);
 }
 
+static void update_curosr(struct waydraw_seat *seat)
+{
+  struct waydraw *waydraw = wl_container_of(seat, waydraw, seat);
+
+  size_t size = seat->radius * 2 + 1;
+  uint32_t *data = calloc(size * size, sizeof *data);
+  draw_circle(data, size, size, seat->radius, seat->radius, seat->radius, 1, seat->color);
+
+  struct wl_buffer *buffer = create_buffer(waydraw, size, size, data);
+  wl_surface_attach(seat->wl_pointer_surface, buffer, 0, 0);
+  wl_surface_damage_buffer(seat->wl_pointer_surface, 0, 0, size, size);
+  wl_surface_commit(seat->wl_pointer_surface);
+}
+
 static void seat_capabilities(void *data, struct wl_seat *wl_seat, uint32_t capabilities)
 {
   struct waydraw_seat *seat = data;
+  struct waydraw *waydraw = wl_container_of(seat, waydraw, seat);
 
   if(seat->wl_keyboard)
     wl_keyboard_destroy(seat->wl_keyboard);
 
   if(seat->wl_pointer)
     wl_pointer_destroy(seat->wl_pointer);
+
+  if(seat->wl_pointer_surface)
+    wl_surface_destroy(seat->wl_pointer_surface);
 
   if(capabilities & WL_SEAT_CAPABILITY_KEYBOARD)
   {
@@ -248,9 +269,13 @@ static void seat_capabilities(void *data, struct wl_seat *wl_seat, uint32_t capa
   {
     seat->wl_pointer = wl_seat_get_pointer(wl_seat);
     wl_pointer_add_listener(seat->wl_pointer, &wl_pointer_listener, seat);
+    seat->wl_pointer_surface = wl_compositor_create_surface(waydraw->wl_compositor);
   }
   else
+  {
     seat->wl_pointer = NULL;
+    seat->wl_pointer_surface = NULL;
+  }
 }
 
 static void keyboard_enter(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, struct wl_surface *surface, struct wl_array *keys)
@@ -272,6 +297,9 @@ static void pointer_enter(void *data, struct wl_pointer *wl_pointer, uint32_t se
   struct waydraw_seat *seat = data;
   assert(seat->pointer_focus == NULL);
   seat->pointer_focus = wl_surface_get_user_data(surface);
+
+  wl_pointer_set_cursor(wl_pointer, serial, seat->wl_pointer_surface, seat->radius, seat->radius);
+  update_curosr(seat);
 }
 
 static void pointer_leave(void *data, struct wl_pointer *wl_pointer, uint32_t serial, struct wl_surface *surface)
@@ -305,7 +333,7 @@ static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t t
     else if((unsigned)y >= output->height)
       y = output->height - 1;
 
-    draw_circle(output->data, output->width, output->height, x, y, seat->radius, seat->color);
+    draw_sphere(output->data, output->width, output->height, x, y, seat->radius, seat->color);
     update_output(output, x - seat->radius, y - seat->radius, 2 * seat->radius + 1, 2 * seat->radius + 1);
   }
 }
@@ -322,9 +350,15 @@ static void pointer_axis(void *data, struct wl_pointer *wl_pointer, uint32_t tim
   struct waydraw_seat *seat = data;
   if(axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
   {
+    int32_t old_radius = seat->radius;
+
     seat->radius += wl_fixed_to_double(value) * SCROLL_SENSITIVITY;
     if(seat->radius < MIN_DRAW_RADIUS)
       seat->radius = MIN_DRAW_RADIUS;
+
+    int32_t offset = old_radius - seat->radius;
+    wl_surface_offset(seat->wl_pointer_surface, offset, offset);
+    update_curosr(seat);
   }
 }
 
