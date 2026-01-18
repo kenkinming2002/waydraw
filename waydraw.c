@@ -1,6 +1,8 @@
 #include "snapshot.h"
 #include "shm.h"
 
+#include "cairo-utils.h"
+
 #include <wayland-client-core.h>
 #include <wayland-client-protocol.h>
 #include <wayland-client.h>
@@ -39,6 +41,15 @@ static double COLOR_PALLETE[][4] = {
 
 #define COLOR_PALLETE_SIZE (sizeof COLOR_PALLETE / sizeof COLOR_PALLETE[0])
 
+enum waydraw_mode
+{
+  WAYDRAW_MODE_BRUSH,
+  WAYDRAW_MODE_RECTANGLE,
+  WAYDRAW_MODE_CIRCLE,
+
+  WAYDRAW_MODE_COUNT,
+};
+
 struct waydraw_output
 {
   struct waydraw *waydraw;
@@ -68,10 +79,19 @@ struct waydraw_seat
   struct waydraw_output *pointer_focus;
 
   double x, y;
+
   unsigned color_index;
   double weight;
 
+  enum waydraw_mode mode;
+  enum waydraw_mode committed_mode;
+
+  double shape_x, shape_y;
+
   struct waydraw_output *drawing_focus;
+
+  cairo_surface_t *surface;
+  cairo_surface_t *base_surface;
   cairo_t *cairo;
 };
 
@@ -420,6 +440,20 @@ static void handle_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t ser
         update_output(output);
       }
       break;
+    case XKB_KEY_T: // This is shift-tab. Don't ask me why.
+      if(seat->mode == 0)
+        seat->mode = WAYDRAW_MODE_COUNT - 1;
+      else
+        seat->mode -= 1;
+      update_cursor(seat);
+      break;
+    case XKB_KEY_t:
+      if(seat->mode == WAYDRAW_MODE_COUNT - 1)
+        seat->mode = 0;
+      else
+        seat->mode += 1;
+      update_cursor(seat);
+      break;
     case XKB_KEY_ISO_Left_Tab: // This is shift-tab. Don't ask me why.
       if(seat->color_index == 0)
         seat->color_index = COLOR_PALLETE_SIZE - 1;
@@ -480,10 +514,48 @@ static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t t
   seat->x = wl_fixed_to_double(surface_x);
   seat->y = wl_fixed_to_double(surface_y);
 
+  // Note: There is a bit of an out-of-sync problem that could happen but should
+  //       not matter. The cairo surface we draw on is from the current node we
+  //       push onto the snapshot tree. It could happen that the user undo when
+  //       we are drawing and the current node will change, in which case we
+  //       will be drawing to a surface that is no longer rendered. The call to
+  //       update_output only redraw the output by copying from the surface on
+  //       the current node on the snapshot tree, which we are not actually
+  //       drawing onto. We could technically try to work around that but there
+  //       is no need to.
   if(seat->drawing_focus)
   {
-    cairo_line_to(seat->cairo, seat->x, seat->y);
-    cairo_stroke_preserve(seat->cairo);
+    switch(seat->committed_mode)
+    {
+    case WAYDRAW_MODE_BRUSH:
+      cairo_line_to(seat->cairo, seat->x, seat->y);
+      cairo_stroke_preserve(seat->cairo);
+      break;
+    case WAYDRAW_MODE_RECTANGLE:
+      {
+        double width = seat->x - seat->shape_x;
+        double height = seat->y - seat->shape_y;
+
+        cairo_image_surface_copy(seat->surface, seat->base_surface);
+        cairo_rectangle(seat->cairo, seat->shape_x, seat->shape_y, width, height);
+        cairo_stroke(seat->cairo);
+      }
+      break;
+    case WAYDRAW_MODE_CIRCLE:
+      {
+        double dx = seat->x - seat->shape_x;
+        double dy = seat->y - seat->shape_y;
+        double radius = sqrt(dx * dx + dy * dy);
+
+        cairo_image_surface_copy(seat->surface, seat->base_surface);
+        cairo_arc(seat->cairo, seat->shape_x, seat->shape_y, radius, 0, 2.0 * M_PI);
+        cairo_stroke(seat->cairo);
+      }
+      break;
+    case WAYDRAW_MODE_COUNT:
+      break;
+    }
+
     update_output(seat->drawing_focus);
   }
 }
@@ -498,11 +570,19 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
       // Do not allow drawing across outputs in a single stroke.
       if(!seat->drawing_focus)
       {
+        seat->committed_mode = seat->mode;
         seat->drawing_focus = seat->pointer_focus;
 
         snapshot_push(seat->drawing_focus->snapshot);
 
-        seat->cairo = cairo_create(seat->drawing_focus->snapshot->current->cairo_surface);
+        seat->surface = cairo_surface_reference(seat->drawing_focus->snapshot->current->cairo_surface);
+        if(seat->committed_mode == WAYDRAW_MODE_BRUSH)
+          seat->base_surface = NULL;
+        else
+          seat->base_surface = cairo_image_surface_clone(seat->surface);
+
+        seat->cairo = cairo_create(seat->surface);
+
         cairo_set_source_rgba(seat->cairo,
             COLOR_PALLETE[seat->color_index][0],
             COLOR_PALLETE[seat->color_index][1],
@@ -512,14 +592,26 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
         cairo_set_line_width(seat->cairo, seat->weight);
         cairo_set_line_cap(seat->cairo, CAIRO_LINE_CAP_ROUND);
         cairo_set_line_join(seat->cairo, CAIRO_LINE_JOIN_ROUND);
-
-        cairo_new_path(seat->cairo);
         cairo_move_to(seat->cairo, seat->x, seat->y);
+
+        if(seat->committed_mode == WAYDRAW_MODE_BRUSH)
+        {
+          cairo_new_path(seat->cairo);
+        }
+        else
+        {
+          seat->shape_x = seat->x;
+          seat->shape_y = seat->y;
+        }
       }
       break;
     case WL_POINTER_BUTTON_STATE_RELEASED:
       if(seat->drawing_focus)
       {
+        cairo_surface_destroy(seat->surface);
+        if(seat->base_surface)
+          cairo_surface_destroy(seat->base_surface);
+
         cairo_destroy(seat->cairo);
 
         seat->cairo = NULL;
@@ -606,6 +698,7 @@ int main(void)
 
   waydraw.seat.weight = 10;
   waydraw.seat.color_index = 0;
+  waydraw.seat.mode = WAYDRAW_MODE_BRUSH;
 
   waydraw.seat.xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
   if(!waydraw.seat.xkb_context)

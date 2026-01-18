@@ -1,10 +1,11 @@
 #include "snapshot.h"
 
+#include "cairo-utils.h"
+
 #include <cairo.h>
 #include <wayland-util.h>
 
 #include <stdlib.h>
-#include <string.h>
 
 struct snapshot *snapshot_new(uint32_t width, uint32_t height)
 {
@@ -29,21 +30,6 @@ void snapshot_map(struct snapshot *snapshot, uint32_t *width, uint32_t *height, 
   *width = cairo_image_surface_get_width(cairo_surface);
   *height = cairo_image_surface_get_height(cairo_surface);
   *data = (uint32_t *)cairo_image_surface_get_data(cairo_surface);
-}
-
-static cairo_surface_t *cairo_image_surface_clone(cairo_surface_t *surface)
-{
-  cairo_surface_flush(surface);
-
-  uint32_t width = cairo_image_surface_get_width(surface);
-  uint32_t height = cairo_image_surface_get_height(surface);
-  uint32_t *data = (uint32_t *)cairo_image_surface_get_data(surface);
-
-  cairo_surface_t *new_surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, width, height);
-  uint32_t *new_data = (uint32_t *)cairo_image_surface_get_data(new_surface);
-  memcpy(new_data, data, width * height * sizeof *data);
-  cairo_surface_mark_dirty(new_surface);
-  return new_surface;
 }
 
 void snapshot_push(struct snapshot *snapshot)
