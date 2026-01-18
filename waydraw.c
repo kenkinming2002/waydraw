@@ -348,6 +348,10 @@ static void seat_capabilities(void *data, struct wl_seat *wl_seat, uint32_t capa
 
 static void keyboard_enter(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, struct wl_surface *surface, struct wl_array *keys)
 {
+  (void)wl_keyboard;
+  (void)serial;
+  (void)keys;
+
   struct waydraw_seat *seat = data;
   assert(seat->keyboard_focus == NULL);
   seat->keyboard_focus = wl_surface_get_user_data(surface);
@@ -355,6 +359,9 @@ static void keyboard_enter(void *data, struct wl_keyboard *wl_keyboard, uint32_t
 
 static void keyboard_leave(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, struct wl_surface *surface)
 {
+  (void)wl_keyboard;
+  (void)serial;
+
   struct waydraw_seat *seat = data;
   assert(seat->keyboard_focus == wl_surface_get_user_data(surface));
   seat->keyboard_focus = NULL;
@@ -362,6 +369,8 @@ static void keyboard_leave(void *data, struct wl_keyboard *wl_keyboard, uint32_t
 
 static void handle_keymap(void *data, struct wl_keyboard *wl_keyboard, uint32_t format, int32_t fd, uint32_t size)
 {
+  (void)wl_keyboard;
+
   struct waydraw_seat *seat = data;
 
   if(seat->xkb_state)
@@ -402,6 +411,10 @@ static void handle_keymap(void *data, struct wl_keyboard *wl_keyboard, uint32_t 
 
 static void handle_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, uint32_t time, uint32_t key, uint32_t state)
 {
+  (void)wl_keyboard;
+  (void)serial;
+  (void)time;
+
   struct waydraw_seat *seat = data;
   struct waydraw_output *output = seat->keyboard_focus;
   assert(seat->xkb_state);
@@ -477,6 +490,9 @@ static void handle_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t ser
 
 static void handle_modifiers(void *data, struct wl_keyboard *wl_keyboard, uint32_t serial, uint32_t mods_depressed, uint32_t mods_latched, uint32_t mods_locked, uint32_t group)
 {
+  (void)wl_keyboard;
+  (void)serial;
+
   struct waydraw_seat *seat = data;
   assert(seat->xkb_state);
   xkb_state_update_mask(seat->xkb_state, mods_depressed, mods_latched, mods_locked, 0, 0, group);
@@ -500,6 +516,9 @@ static void pointer_enter(void *data, struct wl_pointer *wl_pointer, uint32_t se
 
 static void pointer_leave(void *data, struct wl_pointer *wl_pointer, uint32_t serial, struct wl_surface *surface)
 {
+  (void)wl_pointer;
+  (void)serial;
+
   struct waydraw_seat *seat = data;
   assert(seat->pointer_focus == wl_surface_get_user_data(surface));
   seat->pointer_focus = NULL;
@@ -507,6 +526,9 @@ static void pointer_leave(void *data, struct wl_pointer *wl_pointer, uint32_t se
 
 static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t time, wl_fixed_t surface_x, wl_fixed_t surface_y)
 {
+  (void)wl_pointer;
+  (void)time;
+
   struct waydraw_seat *seat = data;
   struct waydraw_output *output = seat->pointer_focus;
   assert(output);
@@ -562,6 +584,10 @@ static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t t
 
 static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t serial, uint32_t time, uint32_t button, uint32_t state)
 {
+  (void)wl_pointer;
+  (void)serial;
+  (void)time;
+
   struct waydraw_seat *seat = data;
   if(button == BTN_LEFT)
     switch(state)
@@ -623,6 +649,9 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
 
 static void pointer_axis(void *data, struct wl_pointer *wl_pointer, uint32_t time, uint32_t axis, wl_fixed_t value)
 {
+  (void)wl_pointer;
+  (void)time;
+
   struct waydraw_seat *seat = data;
   if(axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
   {
