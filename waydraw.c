@@ -69,7 +69,7 @@ struct waydraw_seat
 
   double x, y;
   unsigned color_index;
-  int32_t weight;
+  double weight;
 
   struct waydraw_output *drawing_focus;
   cairo_t *cairo;
@@ -97,7 +97,7 @@ static void handle_seat(struct waydraw *waydraw, struct wl_seat *wl_seat);
 static void init_output(struct waydraw_output *output);
 static void update_output(struct waydraw_output *output);
 
-static void update_curosr(struct waydraw_seat *seat);
+static void update_cursor(struct waydraw_seat *seat);
 
 static void seat_capabilities(void *data, struct wl_seat *wl_seat, uint32_t capabilities);
 
@@ -260,11 +260,12 @@ static void update_output(struct waydraw_output *output)
   wl_surface_commit(output->wl_surface);
 }
 
-static void update_curosr(struct waydraw_seat *seat)
+static void update_cursor(struct waydraw_seat *seat)
 {
   struct waydraw *waydraw = wl_container_of(seat, waydraw, seat);
 
-  size_t size = seat->weight * 2 + 1;
+  int size = ceil(seat->weight);
+  int hsize = round(size * 0.5);
 
   cairo_surface_t *cairo_surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
   cairo_t *cairo = cairo_create(cairo_surface);
@@ -275,7 +276,7 @@ static void update_curosr(struct waydraw_seat *seat)
       COLOR_PALLETE[seat->color_index][3]
   );
   cairo_set_line_width(cairo, 3);
-  cairo_arc(cairo, seat->weight, seat->weight, seat->weight, 0, 2*M_PI);
+  cairo_arc(cairo, hsize, hsize, seat->weight * 0.5, 0, 2*M_PI);
   cairo_fill(cairo);
   cairo_surface_flush(cairo_surface);
 
@@ -424,14 +425,14 @@ static void handle_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t ser
         seat->color_index = COLOR_PALLETE_SIZE - 1;
       else
         seat->color_index -= 1;
-      update_curosr(seat);
+      update_cursor(seat);
       break;
     case XKB_KEY_Tab:
       if(seat->color_index == COLOR_PALLETE_SIZE - 1)
         seat->color_index = 0;
       else
         seat->color_index += 1;
-      update_curosr(seat);
+      update_cursor(seat);
       break;
     case XKB_KEY_q:
       exit(EXIT_SUCCESS);
@@ -456,8 +457,11 @@ static void pointer_enter(void *data, struct wl_pointer *wl_pointer, uint32_t se
   seat->x = wl_fixed_to_double(surface_x);
   seat->y = wl_fixed_to_double(surface_y);
 
-  wl_pointer_set_cursor(wl_pointer, serial, seat->wl_pointer_surface, seat->weight, seat->weight);
-  update_curosr(seat);
+  int size = ceil(seat->weight);
+  int hsize = round(size * 0.5);
+
+  update_cursor(seat);
+  wl_pointer_set_cursor(wl_pointer, serial, seat->wl_pointer_surface, hsize, hsize);
 }
 
 static void pointer_leave(void *data, struct wl_pointer *wl_pointer, uint32_t serial, struct wl_surface *surface)
@@ -505,7 +509,7 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
             COLOR_PALLETE[seat->color_index][2],
             COLOR_PALLETE[seat->color_index][3]
         );
-        cairo_set_line_width(seat->cairo, seat->weight * 2 + 1);
+        cairo_set_line_width(seat->cairo, seat->weight);
         cairo_set_line_cap(seat->cairo, CAIRO_LINE_CAP_ROUND);
         cairo_set_line_join(seat->cairo, CAIRO_LINE_JOIN_ROUND);
 
@@ -530,15 +534,18 @@ static void pointer_axis(void *data, struct wl_pointer *wl_pointer, uint32_t tim
   struct waydraw_seat *seat = data;
   if(axis == WL_POINTER_AXIS_VERTICAL_SCROLL)
   {
-    int32_t old_radius = seat->weight;
+    int old_size = ceil(seat->weight);
+    int old_hsize = round(old_size * 0.5);
 
     seat->weight += wl_fixed_to_double(value) * SCROLL_SENSITIVITY;
     if(seat->weight < MIN_DRAW_RADIUS)
       seat->weight = MIN_DRAW_RADIUS;
 
-    int32_t offset = old_radius - seat->weight;
-    wl_surface_offset(seat->wl_pointer_surface, offset, offset);
-    update_curosr(seat);
+    int size = ceil(seat->weight);
+    int hsize = round(size * 0.5);
+
+    update_cursor(seat);
+    wl_surface_offset(seat->wl_pointer_surface, old_hsize - hsize, old_hsize - hsize);
   }
 }
 
