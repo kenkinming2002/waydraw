@@ -453,19 +453,14 @@ static void handle_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t ser
         update_output(output);
       }
       break;
-    case XKB_KEY_T: // This is shift-tab. Don't ask me why.
-      if(seat->mode == 0)
-        seat->mode = WAYDRAW_MODE_COUNT - 1;
-      else
-        seat->mode -= 1;
-      update_cursor(seat);
+    case XKB_KEY_b:
+      seat->mode = WAYDRAW_MODE_BRUSH;
       break;
-    case XKB_KEY_t:
-      if(seat->mode == WAYDRAW_MODE_COUNT - 1)
-        seat->mode = 0;
-      else
-        seat->mode += 1;
-      update_cursor(seat);
+    case XKB_KEY_c:
+      seat->mode = WAYDRAW_MODE_CIRCLE;
+      break;
+    case XKB_KEY_r:
+      seat->mode = WAYDRAW_MODE_RECTANGLE;
       break;
     case XKB_KEY_ISO_Left_Tab: // This is shift-tab. Don't ask me why.
       if(seat->color_index == 0)
