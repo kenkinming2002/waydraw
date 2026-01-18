@@ -20,5 +20,12 @@ $ meson compile -C build
  - r - select rectangle tool
  - ctrl-z/ctrl-Z - undo/redo
  - ctrl-x/ctrl-X - earlier/later
+ - h - "hibernate" but the surface is still visible
+ - H - "hibernate" and the surface is no longer visible
  - q - quit
 
+## Hibernate
+Hibernation refer to a state in which the program is still running but can no
+longer receive pointer and keyboard inputs. Instead, all pointer and keyboard
+inputs will pass-through to the window at the back. To wakeup waydraw, simply
+re-launch another instance.

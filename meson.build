@@ -26,6 +26,7 @@ sources = [
   'waydraw.c',
   'shm.c',
   'snapshot.c',
+  'hibernate.c',
 ]
 
 exe = executable(

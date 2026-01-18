@@ -1,3 +1,4 @@
+#include "hibernate.h"
 #include "snapshot.h"
 #include "shm.h"
 
@@ -417,6 +418,7 @@ static void handle_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t ser
 
   struct waydraw_seat *seat = data;
   struct waydraw_output *output = seat->keyboard_focus;
+  struct waydraw *waydraw = wl_container_of(seat, waydraw, seat);
   assert(seat->xkb_state);
   assert(output);
 
@@ -475,6 +477,33 @@ static void handle_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t ser
       else
         seat->color_index += 1;
       update_cursor(seat);
+      break;
+    case XKB_KEY_H:
+    case XKB_KEY_h:
+      {
+        struct waydraw_output *output;
+        struct wl_region *empty_region = wl_compositor_create_region(waydraw->wl_compositor);
+
+        wl_list_for_each(output, &waydraw->outputs, link) {
+          if(sym == XKB_KEY_H)
+            wl_surface_attach(output->wl_surface, NULL, 0, 0);
+
+          wl_surface_set_input_region(output->wl_surface, empty_region);
+          zwlr_layer_surface_v1_set_keyboard_interactivity(output->zwlr_layer_surface_v1, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
+          wl_surface_commit(output->wl_surface);
+        }
+
+        wl_region_destroy(empty_region);
+        wl_display_flush(waydraw->wl_display);
+
+        suspend();
+
+        wl_list_for_each(output, &waydraw->outputs, link) {
+          wl_surface_set_input_region(output->wl_surface, NULL);
+          zwlr_layer_surface_v1_set_keyboard_interactivity(output->zwlr_layer_surface_v1, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
+          wl_surface_commit(output->wl_surface);
+        }
+      }
       break;
     case XKB_KEY_q:
       exit(EXIT_SUCCESS);
@@ -671,10 +700,9 @@ static void configure_surface(void *data, struct zwlr_layer_surface_v1 *zwlr_lay
 
   struct waydraw_output *output = data;
   if(!output->snapshot)
-  {
     output->snapshot = snapshot_new(width, height);
-    update_output(output);
-  }
+
+  update_output(output);
 }
 
 static void release_buffer(void *data, struct wl_buffer *wl_buffer)
@@ -716,6 +744,8 @@ static struct wl_buffer *create_buffer(const struct waydraw *waydraw, uint32_t w
 
 int main(void)
 {
+  try_resume();
+
   struct waydraw waydraw = {0};
 
   wl_list_init(&waydraw.outputs);
