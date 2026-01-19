@@ -1,6 +1,6 @@
+#include "cairo-wayland-utils.h"
 #include "hibernate.h"
 #include "snapshot.h"
-#include "shm.h"
 
 #include "cairo-utils.h"
 
@@ -137,9 +137,6 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
 static void pointer_axis(void *data, struct wl_pointer *wl_pointer, uint32_t time, uint32_t axis, wl_fixed_t value);
 
 static void configure_surface(void *data, struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1, uint32_t serial, uint32_t width, uint32_t height);
-static void release_buffer(void *data, struct wl_buffer *wl_buffer);
-
-static struct wl_buffer *create_buffer(const struct waydraw *waydraw, uint32_t width, uint32_t height, void *data);
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored  "-Wincompatible-pointer-types"
@@ -182,10 +179,6 @@ static struct wl_pointer_listener wl_pointer_listener = {
 static struct zwlr_layer_surface_v1_listener zwlr_layer_surface_v1_listener = {
   .configure = &configure_surface,
   .closed = &noop,
-};
-
-static struct wl_buffer_listener wl_buffer_listener = {
-  .release = &release_buffer,
 };
 
 #pragma GCC diagnostic pop
@@ -271,13 +264,8 @@ static void init_output(struct waydraw_output *output)
 
 static void update_output(struct waydraw_output *output)
 {
-  uint32_t width, height;
-  uint32_t *data;
-  snapshot_map(output->snapshot, &width, &height, &data);
-
-  struct wl_buffer *buffer = create_buffer(output->waydraw, width, height, data);
-  wl_surface_attach(output->wl_surface, buffer, 0, 0);
-  wl_surface_damage_buffer(output->wl_surface, 0, 0, width, height);
+  snapshot_update_wl_surface(output->snapshot, output->wl_surface,
+                             output->waydraw->wl_shm);
   wl_surface_commit(output->wl_surface);
 }
 
@@ -301,11 +289,9 @@ static void update_cursor(struct waydraw_seat *seat)
   cairo_fill(cairo);
   cairo_surface_flush(cairo_surface);
 
-  uint32_t *data = (uint32_t *)cairo_image_surface_get_data(cairo_surface);
+  wl_surface_update_from_cairo_surface(seat->wl_pointer_surface, cairo_surface,
+                                       waydraw->wl_shm);
 
-  struct wl_buffer *buffer = create_buffer(waydraw, size, size, data);
-  wl_surface_attach(seat->wl_pointer_surface, buffer, 0, 0);
-  wl_surface_damage_buffer(seat->wl_pointer_surface, 0, 0, size, size);
   wl_surface_commit(seat->wl_pointer_surface);
 
   cairo_destroy(cairo);
@@ -703,43 +689,6 @@ static void configure_surface(void *data, struct zwlr_layer_surface_v1 *zwlr_lay
     output->snapshot = snapshot_new(width, height);
 
   update_output(output);
-}
-
-static void release_buffer(void *data, struct wl_buffer *wl_buffer)
-{
-  (void)data;
-  wl_buffer_destroy(wl_buffer);
-}
-
-static struct wl_buffer *create_buffer(const struct waydraw *waydraw, uint32_t width, uint32_t height, void *data)
-{
-  uint32_t size = width * height * 4;
-
-  int fd = allocate_shm_file(size);
-  if(fd < 0)
-  {
-    fprintf(stderr, "error: failed to open shm file: %s\n", strerror(errno));
-    exit(EXIT_FAILURE);
-  }
-
-  void *storage = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
-  if(storage == MAP_FAILED)
-  {
-    fprintf(stderr, "error: failed to mmap shm file: %s\n", strerror(errno));
-    exit(EXIT_FAILURE);
-  }
-
-  memcpy(storage, data, size);
-
-  struct wl_shm_pool *wl_shm_pool = wl_shm_create_pool(waydraw->wl_shm, fd, size);
-  struct wl_buffer *wl_buffer = wl_shm_pool_create_buffer(wl_shm_pool, 0, width, height, width * 4, WL_SHM_FORMAT_ARGB8888);
-  wl_buffer_add_listener(wl_buffer, &wl_buffer_listener, NULL);
-
-  wl_shm_pool_destroy(wl_shm_pool);
-  munmap(storage, size);
-  close(fd);
-
-  return wl_buffer;
 }
 
 int main(void)

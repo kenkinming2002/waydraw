@@ -27,6 +27,7 @@ sources = [
   'shm.c',
   'snapshot.c',
   'hibernate.c',
+  'cairo-wayland-utils.c',
 ]
 
 exe = executable(

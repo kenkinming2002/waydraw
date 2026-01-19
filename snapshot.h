@@ -15,6 +15,7 @@
 #include <cairo.h>
 
 #include <wayland-util.h>
+#include <wayland-client-protocol.h>
 
 #include <stdint.h>
 #include <stddef.h>
@@ -38,8 +39,6 @@ struct snapshot
 
 struct snapshot *snapshot_new(uint32_t width, uint32_t height);
 
-void snapshot_map(struct snapshot *snapshot, uint32_t *width, uint32_t *height, uint32_t **data);
-
 void snapshot_push(struct snapshot *snapshot);
 void snapshot_maybe_push(struct snapshot *snapshot);
 
@@ -49,5 +48,8 @@ void snapshot_redo(struct snapshot *snapshot);
 void snapshot_earlier(struct snapshot *snapshot);
 void snapshot_later(struct snapshot *snapshot);
 
+void snapshot_update_wl_surface(struct snapshot *snapshot,
+                                struct wl_surface *wl_surface,
+                                struct wl_shm *shm);
 
 #endif // SNAPSHOT_H
