@@ -55,10 +55,9 @@ enum waydraw_mode
 struct waydraw_output
 {
   struct waydraw *waydraw;
-
   struct wl_list link;
-
   struct wl_output *wl_output;
+
   struct wl_surface *wl_surface;
   struct zwlr_layer_surface_v1 *zwlr_layer_surface_v1;
 
@@ -67,11 +66,11 @@ struct waydraw_output
 
 struct waydraw_seat
 {
+  struct waydraw *waydraw;
+  struct wl_list link;
   struct wl_seat *wl_seat;
 
   struct wl_keyboard *wl_keyboard;
-
-  struct xkb_context *xkb_context;
   struct xkb_state *xkb_state;
 
   struct wl_pointer *wl_pointer;
@@ -98,6 +97,8 @@ struct waydraw_seat
 
 struct waydraw
 {
+  struct xkb_context *xkb_context;
+
   struct wl_display *wl_display;
 
   struct wl_compositor *wl_compositor;
@@ -106,9 +107,11 @@ struct waydraw
 
   bool initialized;
 
-  struct waydraw_seat seat;
   struct wl_list outputs;
+  struct wl_list seats;
 };
+
+static void check_globals(struct waydraw *waydraw);
 
 static void handle_global(void *data, struct wl_registry *wl_registry, uint32_t name, const char *interface, uint32_t version);
 
@@ -116,6 +119,8 @@ static void handle_output(struct waydraw *waydraw, struct wl_output *wl_output);
 static void handle_seat(struct waydraw *waydraw, struct wl_seat *wl_seat);
 
 static void init_output(struct waydraw_output *output);
+static void init_seat(struct waydraw_seat *seat);
+
 static void update_output(struct waydraw_output *output);
 
 static void update_cursor(struct waydraw_seat *seat);
@@ -183,6 +188,35 @@ static struct zwlr_layer_surface_v1_listener zwlr_layer_surface_v1_listener = {
 
 #pragma GCC diagnostic pop
 
+static void check_globals(struct waydraw *waydraw)
+{
+  if(!waydraw->wl_compositor)
+  {
+    fprintf(stderr, "error: missing global wl_compositor\n");
+    goto advice;
+  }
+
+  if(!waydraw->wl_shm)
+  {
+    fprintf(stderr, "error: missing global ml_shm\n");
+    goto advice;
+  }
+
+  if(!waydraw->zwlr_layer_shell_v1)
+  {
+    fprintf(stderr, "error: missing global zwlr_layer_shell_v1\n");
+    goto advice;
+  }
+
+  return;
+
+advice:
+    fprintf(stderr, "note: this could be because\n");
+    fprintf(stderr, "note:   1) your compositor publish globals in weird order\n");
+    fprintf(stderr, "note:   2) your compositor genuinely do not have such global\n");
+    exit(EXIT_FAILURE);
+}
+
 static void handle_global(void *data, struct wl_registry *wl_registry, uint32_t name, const char *interface, uint32_t version)
 {
   struct waydraw *waydraw = data;
@@ -220,19 +254,24 @@ static void handle_global(void *data, struct wl_registry *wl_registry, uint32_t 
 
 static void handle_output(struct waydraw *waydraw, struct wl_output *wl_output)
 {
+  check_globals(waydraw);
+
   struct waydraw_output *output = calloc(1, sizeof *output);
   output->waydraw = waydraw;
   output->wl_output = wl_output;
   wl_list_insert(&waydraw->outputs, &output->link);
-
-  if(waydraw->initialized)
-    init_output(output);
+  init_output(output);
 }
 
 static void handle_seat(struct waydraw *waydraw, struct wl_seat *wl_seat)
 {
-  waydraw->seat.wl_seat = wl_seat;
-  wl_seat_add_listener(waydraw->seat.wl_seat, &wl_seat_listener, &waydraw->seat);
+  check_globals(waydraw);
+
+  struct waydraw_seat *seat = calloc(1, sizeof *seat);
+  seat->waydraw = waydraw;
+  seat->wl_seat = wl_seat;
+  wl_list_insert(&waydraw->seats, &seat->link);
+  init_seat(seat);
 }
 
 static void init_output(struct waydraw_output *output)
@@ -262,18 +301,29 @@ static void init_output(struct waydraw_output *output)
   wl_surface_commit(output->wl_surface);
 }
 
+static void init_seat(struct waydraw_seat *seat)
+{
+  seat->weight = 10;
+  seat->color_index = 0;
+  seat->mode = WAYDRAW_MODE_BRUSH;
+
+  wl_seat_add_listener(seat->wl_seat, &wl_seat_listener, seat);
+}
+
 static void update_output(struct waydraw_output *output)
 {
   cairo_surface_t *new_surface = cairo_image_surface_clone(output->snapshot->current->cairo_surface);
   cairo_t *cairo = cairo_create(new_surface);
 
   struct waydraw *waydraw = output->waydraw;
-  struct waydraw_seat *seat = &waydraw->seat;
-  if(seat->drawing_focus == output)
-  {
-    cairo_set_source_surface(cairo, seat->surface, 0.0, 0.0);
-    cairo_paint(cairo);
-  }
+
+  struct waydraw_seat *seat;
+  wl_list_for_each(seat, &waydraw->seats, link)
+    if(seat->drawing_focus == output)
+    {
+      cairo_set_source_surface(cairo, seat->surface, 0.0, 0.0);
+      cairo_paint(cairo);
+    }
 
   wl_surface_update_from_cairo_surface(output->wl_surface, new_surface, waydraw->wl_shm);
   wl_surface_commit(output->wl_surface);
@@ -284,7 +334,7 @@ static void update_output(struct waydraw_output *output)
 
 static void update_cursor(struct waydraw_seat *seat)
 {
-  struct waydraw *waydraw = wl_container_of(seat, waydraw, seat);
+  struct waydraw *waydraw = seat->waydraw;
 
   int size = ceil(seat->weight);
   int hsize = round(size * 0.5);
@@ -314,7 +364,7 @@ static void update_cursor(struct waydraw_seat *seat)
 static void seat_capabilities(void *data, struct wl_seat *wl_seat, uint32_t capabilities)
 {
   struct waydraw_seat *seat = data;
-  struct waydraw *waydraw = wl_container_of(seat, waydraw, seat);
+  struct waydraw *waydraw = seat->waydraw;
 
   if(seat->wl_keyboard)
     wl_keyboard_destroy(seat->wl_keyboard);
@@ -372,6 +422,7 @@ static void handle_keymap(void *data, struct wl_keyboard *wl_keyboard, uint32_t 
   (void)wl_keyboard;
 
   struct waydraw_seat *seat = data;
+  struct waydraw *waydraw = seat->waydraw;
 
   if(seat->xkb_state)
     xkb_state_unref(seat->xkb_state);
@@ -386,7 +437,7 @@ static void handle_keymap(void *data, struct wl_keyboard *wl_keyboard, uint32_t 
   }
 
   struct xkb_keymap *xkb_keymap = xkb_keymap_new_from_string(
-      seat->xkb_context,
+      waydraw->xkb_context,
       map_shm,
       XKB_KEYMAP_FORMAT_TEXT_V1,
       XKB_KEYMAP_COMPILE_NO_FLAGS);
@@ -417,7 +468,7 @@ static void handle_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t ser
 
   struct waydraw_seat *seat = data;
   struct waydraw_output *output = seat->keyboard_focus;
-  struct waydraw *waydraw = wl_container_of(seat, waydraw, seat);
+  struct waydraw *waydraw = seat->waydraw;
   assert(seat->xkb_state);
   assert(output);
 
@@ -721,14 +772,8 @@ int main(void)
 
   struct waydraw waydraw = {0};
 
-  wl_list_init(&waydraw.outputs);
-
-  waydraw.seat.weight = 10;
-  waydraw.seat.color_index = 0;
-  waydraw.seat.mode = WAYDRAW_MODE_BRUSH;
-
-  waydraw.seat.xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-  if(!waydraw.seat.xkb_context)
+  waydraw.xkb_context = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+  if(!waydraw.xkb_context)
   {
     fprintf(stderr, "error: failed to create xkb context\n");
     exit(EXIT_FAILURE);
@@ -749,31 +794,9 @@ int main(void)
   }
 
   wl_registry_add_listener(registry, &wl_registry_listener, &waydraw);
-  wl_display_roundtrip(waydraw.wl_display);
 
-  if(!waydraw.wl_compositor)
-  {
-    fprintf(stderr, "error: missing wl_compositor\n");
-    exit(EXIT_FAILURE);
-  }
-
-  if(!waydraw.wl_shm)
-  {
-    fprintf(stderr, "error: missing ml_shm\n");
-    exit(EXIT_FAILURE);
-  }
-
-  if(!waydraw.zwlr_layer_shell_v1)
-  {
-    fprintf(stderr, "error: missing zwlr_layer_shell_v1\n");
-    exit(EXIT_FAILURE);
-  }
-
-  waydraw.initialized = true;
-
-  struct waydraw_output *output;
-  wl_list_for_each(output, &waydraw.outputs, link)
-    init_output(output);
+  wl_list_init(&waydraw.outputs);
+  wl_list_init(&waydraw.seats);
 
   while(wl_display_dispatch(waydraw.wl_display))
     ;
