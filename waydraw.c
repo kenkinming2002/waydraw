@@ -1,4 +1,5 @@
 #include "cairo-wayland-utils.h"
+#include "cairo.h"
 #include "hibernate.h"
 #include "snapshot.h"
 
@@ -92,7 +93,6 @@ struct waydraw_seat
   struct waydraw_output *drawing_focus;
 
   cairo_surface_t *surface;
-  cairo_surface_t *base_surface;
   cairo_t *cairo;
 };
 
@@ -264,9 +264,22 @@ static void init_output(struct waydraw_output *output)
 
 static void update_output(struct waydraw_output *output)
 {
-  snapshot_update_wl_surface(output->snapshot, output->wl_surface,
-                             output->waydraw->wl_shm);
+  cairo_surface_t *new_surface = cairo_image_surface_clone(output->snapshot->current->cairo_surface);
+  cairo_t *cairo = cairo_create(new_surface);
+
+  struct waydraw *waydraw = output->waydraw;
+  struct waydraw_seat *seat = &waydraw->seat;
+  if(seat->drawing_focus == output)
+  {
+    cairo_set_source_surface(cairo, seat->surface, 0.0, 0.0);
+    cairo_paint(cairo);
+  }
+
+  wl_surface_update_from_cairo_surface(output->wl_surface, new_surface, waydraw->wl_shm);
   wl_surface_commit(output->wl_surface);
+
+  cairo_surface_destroy(new_surface);
+  cairo_destroy(cairo);
 }
 
 static void update_cursor(struct waydraw_seat *seat)
@@ -568,7 +581,11 @@ static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t t
         double width = seat->x - seat->shape_x;
         double height = seat->y - seat->shape_y;
 
-        cairo_image_surface_copy(seat->surface, seat->base_surface);
+        cairo_save(seat->cairo);
+          cairo_set_operator(seat->cairo, CAIRO_OPERATOR_CLEAR);
+          cairo_paint(seat->cairo);
+        cairo_restore(seat->cairo);
+
         cairo_rectangle(seat->cairo, seat->shape_x, seat->shape_y, width, height);
         cairo_stroke(seat->cairo);
       }
@@ -579,7 +596,11 @@ static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t t
         double dy = seat->y - seat->shape_y;
         double radius = sqrt(dx * dx + dy * dy);
 
-        cairo_image_surface_copy(seat->surface, seat->base_surface);
+        cairo_save(seat->cairo);
+          cairo_set_operator(seat->cairo, CAIRO_OPERATOR_CLEAR);
+          cairo_paint(seat->cairo);
+        cairo_restore(seat->cairo);
+
         cairo_arc(seat->cairo, seat->shape_x, seat->shape_y, radius, 0, 2.0 * M_PI);
         cairo_stroke(seat->cairo);
       }
@@ -606,17 +627,14 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
       // Do not allow drawing across outputs in a single stroke.
       if(!seat->drawing_focus)
       {
-        seat->committed_mode = seat->mode;
-        seat->drawing_focus = seat->pointer_focus;
+        struct waydraw_output *output = seat->pointer_focus;
+        seat->drawing_focus = output;
 
-        snapshot_push(seat->drawing_focus->snapshot);
+        cairo_format_t format = cairo_image_surface_get_format(output->snapshot->current->cairo_surface);
+        int width = cairo_image_surface_get_width(output->snapshot->current->cairo_surface);
+        int height = cairo_image_surface_get_height(output->snapshot->current->cairo_surface);
 
-        seat->surface = cairo_surface_reference(seat->drawing_focus->snapshot->current->cairo_surface);
-        if(seat->committed_mode == WAYDRAW_MODE_BRUSH)
-          seat->base_surface = NULL;
-        else
-          seat->base_surface = cairo_image_surface_clone(seat->surface);
-
+        seat->surface = cairo_image_surface_create(format, width, height);
         seat->cairo = cairo_create(seat->surface);
 
         cairo_set_source_rgba(seat->cairo,
@@ -625,11 +643,14 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
             COLOR_PALLETE[seat->color_index][2],
             COLOR_PALLETE[seat->color_index][3]
         );
+
         cairo_set_line_width(seat->cairo, seat->weight);
         cairo_set_line_cap(seat->cairo, CAIRO_LINE_CAP_ROUND);
         cairo_set_line_join(seat->cairo, CAIRO_LINE_JOIN_ROUND);
+
         cairo_move_to(seat->cairo, seat->x, seat->y);
 
+        seat->committed_mode = seat->mode;
         if(seat->committed_mode == WAYDRAW_MODE_BRUSH)
         {
           cairo_new_path(seat->cairo);
@@ -639,19 +660,27 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
           seat->shape_x = seat->x;
           seat->shape_y = seat->y;
         }
+
+        update_output(output);
       }
       break;
     case WL_POINTER_BUTTON_STATE_RELEASED:
       if(seat->drawing_focus)
       {
-        cairo_surface_destroy(seat->surface);
-        if(seat->base_surface)
-          cairo_surface_destroy(seat->base_surface);
+        struct waydraw_output *output = seat->drawing_focus;
+        seat->drawing_focus = NULL;
 
+        cairo_surface_t *new_surface = cairo_image_surface_clone(output->snapshot->current->cairo_surface);
+        cairo_t *cairo = cairo_create(new_surface);
+
+        cairo_set_source_surface(cairo, seat->surface, 0.0, 0.0);
+        cairo_paint(cairo);
+
+        cairo_surface_destroy(seat->surface);
         cairo_destroy(seat->cairo);
 
-        seat->cairo = NULL;
-        seat->drawing_focus = NULL;
+        snapshot_push(output->snapshot, new_surface);
+        update_output(output);
       }
       break;
     }

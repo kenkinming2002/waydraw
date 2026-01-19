@@ -39,8 +39,7 @@ struct snapshot
 
 struct snapshot *snapshot_new(uint32_t width, uint32_t height);
 
-void snapshot_push(struct snapshot *snapshot);
-void snapshot_maybe_push(struct snapshot *snapshot);
+void snapshot_push(struct snapshot *snapshot, cairo_surface_t *surface);
 
 void snapshot_undo(struct snapshot *snapshot);
 void snapshot_redo(struct snapshot *snapshot);

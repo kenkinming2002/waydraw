@@ -1,6 +1,5 @@
 #include "snapshot.h"
 
-#include "cairo-utils.h"
 #include "cairo-wayland-utils.h"
 
 #include <cairo.h>
@@ -22,23 +21,17 @@ struct snapshot *snapshot_new(uint32_t width, uint32_t height)
   return snapshot;
 }
 
-void snapshot_push(struct snapshot *snapshot)
+void snapshot_push(struct snapshot *snapshot, cairo_surface_t *surface)
 {
   struct snapshot_node *node = calloc(1, sizeof *node);
   wl_list_init(&node->childs);
-  node->cairo_surface = cairo_image_surface_clone(snapshot->current->cairo_surface);
+  node->cairo_surface = surface;
 
   wl_list_insert(snapshot->nodes.prev, &node->link);
   wl_list_insert(snapshot->current->childs.prev, &node->silbing_link);
 
   node->parent = snapshot->current;
   snapshot->current = node;
-}
-
-void snapshot_maybe_push(struct snapshot *snapshot)
-{
-  if(!wl_list_empty(&snapshot->current->childs))
-    snapshot_push(snapshot);
 }
 
 void snapshot_undo(struct snapshot *snapshot)
