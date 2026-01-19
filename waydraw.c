@@ -88,7 +88,7 @@ struct waydraw_seat
   enum waydraw_mode mode;
   enum waydraw_mode committed_mode;
 
-  double shape_x, shape_y;
+  double saved_x, saved_y;
 
   struct waydraw_output *drawing_focus;
 
@@ -573,27 +573,31 @@ static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t t
     switch(seat->committed_mode)
     {
     case WAYDRAW_MODE_BRUSH:
+      cairo_move_to(seat->cairo, seat->saved_x, seat->saved_y);
       cairo_line_to(seat->cairo, seat->x, seat->y);
-      cairo_stroke_preserve(seat->cairo);
+      cairo_stroke(seat->cairo);
+
+      seat->saved_x = seat->x;
+      seat->saved_y = seat->y;
       break;
     case WAYDRAW_MODE_RECTANGLE:
       {
-        double width = seat->x - seat->shape_x;
-        double height = seat->y - seat->shape_y;
+        double width = seat->x - seat->saved_x;
+        double height = seat->y - seat->saved_y;
 
         cairo_save(seat->cairo);
           cairo_set_operator(seat->cairo, CAIRO_OPERATOR_CLEAR);
           cairo_paint(seat->cairo);
         cairo_restore(seat->cairo);
 
-        cairo_rectangle(seat->cairo, seat->shape_x, seat->shape_y, width, height);
+        cairo_rectangle(seat->cairo, seat->saved_x, seat->saved_y, width, height);
         cairo_stroke(seat->cairo);
       }
       break;
     case WAYDRAW_MODE_CIRCLE:
       {
-        double dx = seat->x - seat->shape_x;
-        double dy = seat->y - seat->shape_y;
+        double dx = seat->x - seat->saved_x;
+        double dy = seat->y - seat->saved_y;
         double radius = sqrt(dx * dx + dy * dy);
 
         cairo_save(seat->cairo);
@@ -601,7 +605,7 @@ static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t t
           cairo_paint(seat->cairo);
         cairo_restore(seat->cairo);
 
-        cairo_arc(seat->cairo, seat->shape_x, seat->shape_y, radius, 0, 2.0 * M_PI);
+        cairo_arc(seat->cairo, seat->saved_x, seat->saved_y, radius, 0, 2.0 * M_PI);
         cairo_stroke(seat->cairo);
       }
       break;
@@ -648,18 +652,9 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
         cairo_set_line_cap(seat->cairo, CAIRO_LINE_CAP_ROUND);
         cairo_set_line_join(seat->cairo, CAIRO_LINE_JOIN_ROUND);
 
-        cairo_move_to(seat->cairo, seat->x, seat->y);
-
         seat->committed_mode = seat->mode;
-        if(seat->committed_mode == WAYDRAW_MODE_BRUSH)
-        {
-          cairo_new_path(seat->cairo);
-        }
-        else
-        {
-          seat->shape_x = seat->x;
-          seat->shape_y = seat->y;
-        }
+        seat->saved_x = seat->x;
+        seat->saved_y = seat->y;
 
         update_output(output);
       }
