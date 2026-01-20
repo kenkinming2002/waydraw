@@ -47,8 +47,4 @@ void snapshot_redo(struct snapshot *snapshot);
 void snapshot_earlier(struct snapshot *snapshot);
 void snapshot_later(struct snapshot *snapshot);
 
-void snapshot_update_wl_surface(struct snapshot *snapshot,
-                                struct wl_surface *wl_surface,
-                                struct wl_shm *shm);
-
 #endif // SNAPSHOT_H
