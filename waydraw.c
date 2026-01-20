@@ -46,6 +46,8 @@ static double COLOR_PALLETE[][4] = {
 enum waydraw_mode
 {
   WAYDRAW_MODE_BRUSH,
+
+  WAYDRAW_MODE_LINE,
   WAYDRAW_MODE_RECTANGLE,
   WAYDRAW_MODE_CIRCLE,
 
@@ -508,6 +510,9 @@ static void handle_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t ser
     case XKB_KEY_b:
       seat->mode = WAYDRAW_MODE_BRUSH;
       break;
+    case XKB_KEY_l:
+      seat->mode = WAYDRAW_MODE_LINE;
+      break;
     case XKB_KEY_c:
       seat->mode = WAYDRAW_MODE_CIRCLE;
       break;
@@ -630,6 +635,18 @@ static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t t
 
       seat->saved_x = seat->x;
       seat->saved_y = seat->y;
+      break;
+    case WAYDRAW_MODE_LINE:
+      {
+        cairo_save(seat->cairo);
+          cairo_set_operator(seat->cairo, CAIRO_OPERATOR_CLEAR);
+          cairo_paint(seat->cairo);
+        cairo_restore(seat->cairo);
+
+        cairo_move_to(seat->cairo, seat->saved_x, seat->saved_y);
+        cairo_line_to(seat->cairo, seat->x, seat->y);
+        cairo_stroke(seat->cairo);
+      }
       break;
     case WAYDRAW_MODE_RECTANGLE:
       {
