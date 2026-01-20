@@ -125,6 +125,8 @@ static void init_seat(struct waydraw_seat *seat);
 
 static void update_output(struct waydraw_output *output);
 
+static void update_seat_preview(struct waydraw_seat *seat);
+
 static void update_cursor(struct waydraw_seat *seat);
 
 static void seat_capabilities(void *data, struct wl_seat *wl_seat, uint32_t capabilities);
@@ -332,6 +334,66 @@ static void update_output(struct waydraw_output *output)
 
   cairo_surface_destroy(new_surface);
   cairo_destroy(cairo);
+}
+
+static void update_seat_preview(struct waydraw_seat *seat)
+{
+  assert(seat->drawing_focus);
+
+  switch(seat->committed_mode)
+  {
+  case WAYDRAW_MODE_BRUSH:
+    cairo_move_to(seat->cairo, seat->saved_x, seat->saved_y);
+    cairo_line_to(seat->cairo, seat->x, seat->y);
+    cairo_stroke(seat->cairo);
+
+    seat->saved_x = seat->x;
+    seat->saved_y = seat->y;
+    break;
+  case WAYDRAW_MODE_LINE:
+    {
+      cairo_save(seat->cairo);
+      cairo_set_operator(seat->cairo, CAIRO_OPERATOR_CLEAR);
+      cairo_paint(seat->cairo);
+      cairo_restore(seat->cairo);
+
+      cairo_move_to(seat->cairo, seat->saved_x, seat->saved_y);
+      cairo_line_to(seat->cairo, seat->x, seat->y);
+      cairo_stroke(seat->cairo);
+    }
+    break;
+  case WAYDRAW_MODE_RECTANGLE:
+    {
+      double width = seat->x - seat->saved_x;
+      double height = seat->y - seat->saved_y;
+
+      cairo_save(seat->cairo);
+      cairo_set_operator(seat->cairo, CAIRO_OPERATOR_CLEAR);
+      cairo_paint(seat->cairo);
+      cairo_restore(seat->cairo);
+
+      cairo_rectangle(seat->cairo, seat->saved_x, seat->saved_y, width, height);
+      cairo_stroke(seat->cairo);
+    }
+    break;
+  case WAYDRAW_MODE_CIRCLE:
+    {
+      double dx = seat->x - seat->saved_x;
+      double dy = seat->y - seat->saved_y;
+      double radius = sqrt(dx * dx + dy * dy);
+
+      cairo_save(seat->cairo);
+      cairo_set_operator(seat->cairo, CAIRO_OPERATOR_CLEAR);
+      cairo_paint(seat->cairo);
+      cairo_restore(seat->cairo);
+
+      cairo_arc(seat->cairo, seat->saved_x, seat->saved_y, radius, 0, 2.0 * M_PI);
+      cairo_stroke(seat->cairo);
+    }
+    break;
+  case WAYDRAW_MODE_COUNT:
+    break;
+  }
 }
 
 static void update_cursor(struct waydraw_seat *seat)
@@ -626,61 +688,7 @@ static void pointer_motion(void *data, struct wl_pointer *wl_pointer, uint32_t t
   //       is no need to.
   if(seat->drawing_focus)
   {
-    switch(seat->committed_mode)
-    {
-    case WAYDRAW_MODE_BRUSH:
-      cairo_move_to(seat->cairo, seat->saved_x, seat->saved_y);
-      cairo_line_to(seat->cairo, seat->x, seat->y);
-      cairo_stroke(seat->cairo);
-
-      seat->saved_x = seat->x;
-      seat->saved_y = seat->y;
-      break;
-    case WAYDRAW_MODE_LINE:
-      {
-        cairo_save(seat->cairo);
-          cairo_set_operator(seat->cairo, CAIRO_OPERATOR_CLEAR);
-          cairo_paint(seat->cairo);
-        cairo_restore(seat->cairo);
-
-        cairo_move_to(seat->cairo, seat->saved_x, seat->saved_y);
-        cairo_line_to(seat->cairo, seat->x, seat->y);
-        cairo_stroke(seat->cairo);
-      }
-      break;
-    case WAYDRAW_MODE_RECTANGLE:
-      {
-        double width = seat->x - seat->saved_x;
-        double height = seat->y - seat->saved_y;
-
-        cairo_save(seat->cairo);
-          cairo_set_operator(seat->cairo, CAIRO_OPERATOR_CLEAR);
-          cairo_paint(seat->cairo);
-        cairo_restore(seat->cairo);
-
-        cairo_rectangle(seat->cairo, seat->saved_x, seat->saved_y, width, height);
-        cairo_stroke(seat->cairo);
-      }
-      break;
-    case WAYDRAW_MODE_CIRCLE:
-      {
-        double dx = seat->x - seat->saved_x;
-        double dy = seat->y - seat->saved_y;
-        double radius = sqrt(dx * dx + dy * dy);
-
-        cairo_save(seat->cairo);
-          cairo_set_operator(seat->cairo, CAIRO_OPERATOR_CLEAR);
-          cairo_paint(seat->cairo);
-        cairo_restore(seat->cairo);
-
-        cairo_arc(seat->cairo, seat->saved_x, seat->saved_y, radius, 0, 2.0 * M_PI);
-        cairo_stroke(seat->cairo);
-      }
-      break;
-    case WAYDRAW_MODE_COUNT:
-      break;
-    }
-
+    update_seat_preview(seat);
     update_output(seat->drawing_focus);
   }
 }
@@ -724,13 +732,7 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
         seat->saved_x = seat->x;
         seat->saved_y = seat->y;
 
-        if(seat->committed_mode == WAYDRAW_MODE_BRUSH)
-        {
-          cairo_move_to(seat->cairo, seat->saved_x, seat->saved_y);
-          cairo_line_to(seat->cairo, seat->saved_x, seat->saved_y);
-          cairo_stroke(seat->cairo);
-        }
-
+        update_seat_preview(seat);
         update_output(output);
       }
       break;
