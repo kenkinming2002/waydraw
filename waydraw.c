@@ -127,7 +127,7 @@ static void update_output(struct waydraw_output *output);
 
 static void update_seat_preview(struct waydraw_seat *seat);
 
-static void update_cursor(struct waydraw_seat *seat);
+static void update_seat_pointer(struct waydraw_seat *seat);
 
 static void seat_capabilities(void *data, struct wl_seat *wl_seat, uint32_t capabilities);
 
@@ -396,33 +396,38 @@ static void update_seat_preview(struct waydraw_seat *seat)
   }
 }
 
-static void update_cursor(struct waydraw_seat *seat)
+static void update_seat_pointer(struct waydraw_seat *seat)
 {
   struct waydraw *waydraw = seat->waydraw;
 
-  int size = ceil(seat->weight);
-  int hsize = round(size * 0.5);
+  if(!seat->drawing_focus)
+  {
+    int size = ceil(seat->weight);
+    int hsize = round(size * 0.5);
 
-  cairo_surface_t *cairo_surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
-  cairo_t *cairo = cairo_create(cairo_surface);
-  cairo_set_source_rgba(cairo,
+    cairo_surface_t *cairo_surface = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, size, size);
+    cairo_t *cairo = cairo_create(cairo_surface);
+
+    cairo_set_source_rgba(cairo,
       COLOR_PALLETE[seat->color_index][0],
       COLOR_PALLETE[seat->color_index][1],
       COLOR_PALLETE[seat->color_index][2],
       COLOR_PALLETE[seat->color_index][3]
-  );
-  cairo_set_line_width(cairo, 3);
-  cairo_arc(cairo, hsize, hsize, seat->weight * 0.5, 0, 2*M_PI);
-  cairo_fill(cairo);
-  cairo_surface_flush(cairo_surface);
+    );
+    cairo_set_line_width(cairo, 3);
+    cairo_arc(cairo, hsize, hsize, seat->weight * 0.5, 0, 2*M_PI);
+    cairo_fill(cairo);
 
-  wl_surface_update_from_cairo_surface(seat->wl_pointer_surface, cairo_surface,
-                                       waydraw->wl_shm);
+    wl_surface_update_from_cairo_surface(seat->wl_pointer_surface, cairo_surface, waydraw->wl_shm);
+
+    cairo_destroy(cairo);
+    cairo_surface_destroy(cairo_surface);
+  }
+  else
+    wl_surface_attach(seat->wl_pointer_surface, NULL, 0, 0);
 
   wl_surface_commit(seat->wl_pointer_surface);
 
-  cairo_destroy(cairo);
-  cairo_surface_destroy(cairo_surface);
 }
 
 static void seat_capabilities(void *data, struct wl_seat *wl_seat, uint32_t capabilities)
@@ -586,14 +591,14 @@ static void handle_key(void *data, struct wl_keyboard *wl_keyboard, uint32_t ser
         seat->color_index = COLOR_PALLETE_SIZE - 1;
       else
         seat->color_index -= 1;
-      update_cursor(seat);
+      update_seat_pointer(seat);
       break;
     case XKB_KEY_Tab:
       if(seat->color_index == COLOR_PALLETE_SIZE - 1)
         seat->color_index = 0;
       else
         seat->color_index += 1;
-      update_cursor(seat);
+      update_seat_pointer(seat);
       break;
     case XKB_KEY_H:
     case XKB_KEY_h:
@@ -651,7 +656,7 @@ static void pointer_enter(void *data, struct wl_pointer *wl_pointer, uint32_t se
   int size = ceil(seat->weight);
   int hsize = round(size * 0.5);
 
-  update_cursor(seat);
+  update_seat_pointer(seat);
   wl_pointer_set_cursor(wl_pointer, serial, seat->wl_pointer_surface, hsize, hsize);
 }
 
@@ -733,6 +738,7 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
         seat->saved_y = seat->y;
 
         update_seat_preview(seat);
+        update_seat_pointer(seat);
         update_output(output);
       }
       break;
@@ -752,6 +758,7 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
         cairo_destroy(seat->cairo);
 
         snapshot_push(output->snapshot, new_surface);
+        update_seat_pointer(seat);
         update_output(output);
       }
       break;
@@ -776,7 +783,7 @@ static void pointer_axis(void *data, struct wl_pointer *wl_pointer, uint32_t tim
     int size = ceil(seat->weight);
     int hsize = round(size * 0.5);
 
-    update_cursor(seat);
+    update_seat_pointer(seat);
     wl_surface_offset(seat->wl_pointer_surface, old_hsize - hsize, old_hsize - hsize);
   }
 }
