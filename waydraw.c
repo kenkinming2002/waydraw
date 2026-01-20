@@ -707,6 +707,13 @@ static void pointer_button(void *data, struct wl_pointer *wl_pointer, uint32_t s
         seat->saved_x = seat->x;
         seat->saved_y = seat->y;
 
+        if(seat->committed_mode == WAYDRAW_MODE_BRUSH)
+        {
+          cairo_move_to(seat->cairo, seat->saved_x, seat->saved_y);
+          cairo_line_to(seat->cairo, seat->saved_x, seat->saved_y);
+          cairo_stroke(seat->cairo);
+        }
+
         update_output(output);
       }
       break;
