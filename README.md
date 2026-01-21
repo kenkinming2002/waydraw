@@ -16,6 +16,7 @@ $ meson compile -C build
 ## Shortcuts
  - tab/shift-tab - cycle through color palette
  - b - select brush tool
+ - l - select line tool
  - c - select circle tool
  - r - select rectangle tool
  - ctrl-z/ctrl-Z - undo/redo
